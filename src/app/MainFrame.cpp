@@ -1,5 +1,6 @@
 #include "MainFrame.h"
 #include "PianoWindow.h"
+#include "../audio/WaveExport.h"
 
 #include <algorithm>
 #include <array>
@@ -16,6 +17,7 @@
 #include <wx/button.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcmemory.h>
+#include <wx/dirdlg.h>
 #include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/font.h>
@@ -63,6 +65,7 @@ enum : int {
     kIdPlayEffect,
     kIdStopEffect,
     kIdAudioSettings,
+    kIdExportWave,
     kIdNotImplemented
 };
 
@@ -421,7 +424,7 @@ void MainFrame::createMenu() {
 
     auto* exportMenu = new wxMenu();
     exportMenu->Append(kIdNotImplemented, "VTII Sample...");
-    exportMenu->Append(kIdNotImplemented, "Wave file...");
+    exportMenu->Append(kIdExportWave, "Wave file...");
     exportMenu->Append(kIdNotImplemented, "CSV...");
     exportMenu->AppendSeparator();
     exportCurrentItem_ = exportMenu->AppendRadioItem(kIdNotImplemented + 1, "Current effect");
@@ -448,6 +451,7 @@ void MainFrame::createMenu() {
     Bind(wxEVT_MENU, &MainFrame::onSaveBankNoNames, this, kIdSaveBankNoNames);
     Bind(wxEVT_MENU, &MainFrame::onLoadEffect, this, kIdLoadEffect);
     Bind(wxEVT_MENU, &MainFrame::onSaveEffect, this, kIdSaveEffect);
+    Bind(wxEVT_MENU, &MainFrame::onExportWave, this, kIdExportWave);
 
     Bind(wxEVT_MENU, &MainFrame::onEditCut, this, kIdEditCut);
     Bind(wxEVT_MENU, &MainFrame::onEditCopy, this, kIdEditCopy);
@@ -947,6 +951,60 @@ void MainFrame::onSaveEffect(wxCommandEvent& event) {
     if (!bank_.saveEffect(currentEffect_, selected)) {
         wxMessageBox("Can't save effect.", "Error", wxOK | wxICON_ERROR, this);
         return;
+    }
+}
+
+void MainFrame::onExportWave(wxCommandEvent& event) {
+    (void)event;
+
+    if (exportAllItem_ && exportAllItem_->IsChecked()) {
+        wxDirDialog dlg(this, "Export all effects as WAV files — choose a folder");
+        if (dlg.ShowModal() != wxID_OK) {
+            return;
+        }
+        const std::filesystem::path dir = dlg.GetPath().ToStdString();
+
+        int exported = 0;
+        int failed = 0;
+        for (std::size_t i = 0; i < bank_.effectCount(); ++i) {
+            if (bank_.effectRealLength(i) == 0) {
+                continue;  // matches the original's multi-export: skip empty effects
+            }
+            const auto name = sanitizeFileName(bank_.effect(i).name);
+            const auto path = dir / (wxString::Format("%03zu_%s.wav", i, name).ToStdString());
+            if (exportEffectWave(i, path)) {
+                ++exported;
+            } else {
+                ++failed;
+            }
+        }
+
+        if (failed > 0) {
+            wxMessageBox(wxString::Format("Exported %d effect(s); %d failed.", exported, failed),
+                         "Export wave", wxOK | wxICON_WARNING, this);
+        } else {
+            wxMessageBox(wxString::Format("Exported %d effect(s).", exported),
+                         "Export wave", wxOK | wxICON_INFORMATION, this);
+        }
+        return;
+    }
+
+    const auto defaultName = sanitizeFileName(bank_.effect(currentEffect_).name);
+
+    wxFileDialog dlg(this,
+                     "Export current effect as WAV",
+                     wxEmptyString,
+                     defaultName + ".wav",
+                     "WAV file (*.wav)|*.wav|All files (*.*)|*.*",
+                     wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+
+    if (dlg.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    const std::filesystem::path selected = dlg.GetPath().ToStdString();
+    if (!exportEffectWave(currentEffect_, selected)) {
+        wxMessageBox("Can't export effect (it may be empty).", "Error", wxOK | wxICON_ERROR, this);
     }
 }
 
@@ -1820,20 +1878,35 @@ void MainFrame::releaseHoldZone() {
     }
 }
 
-void MainFrame::playEffectFrom(std::size_t startFrame) {
-    const auto& fx = bank_.effect(currentEffect_);
-    const auto realLen = bank_.effectRealLength(currentEffect_);
-    if (startFrame >= realLen) {
-        return;
-    }
+std::vector<AudioEngine::FrameData> MainFrame::buildFrameData(std::size_t effectIndex) const {
+    const auto& fx = bank_.effect(effectIndex);
+    const auto realLen = bank_.effectRealLength(effectIndex);
 
     std::vector<AudioEngine::FrameData> frames;
-    frames.reserve(realLen - startFrame);
-    for (std::size_t i = startFrame; i < realLen; ++i) {
+    frames.reserve(realLen);
+    for (std::size_t i = 0; i < realLen; ++i) {
         const auto& cell = fx.frames[i];
         frames.push_back({cell.tone, cell.noise, cell.volume, cell.toneEnable, cell.noiseEnable});
     }
+    return frames;
+}
+
+void MainFrame::playEffectFrom(std::size_t startFrame) {
+    auto frames = buildFrameData(currentEffect_);
+    if (startFrame >= frames.size()) {
+        return;
+    }
+    frames.erase(frames.begin(), frames.begin() + static_cast<std::ptrdiff_t>(startFrame));
     audioEngine_.play(frames);
+}
+
+bool MainFrame::exportEffectWave(std::size_t effectIndex, const std::filesystem::path& path) {
+    const auto frames = buildFrameData(effectIndex);
+    if (frames.empty()) {
+        return false;
+    }
+    const auto pcm = audioEngine_.renderToPcm(frames);
+    return WriteWaveFile(path.string(), pcm, audioEngine_.config().sampleRate);
 }
 
 void MainFrame::togglePianoInput() {

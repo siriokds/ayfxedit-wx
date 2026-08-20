@@ -27,6 +27,7 @@ private:
     void onSaveBankNoNames(wxCommandEvent& event);
     void onLoadEffect(wxCommandEvent& event);
     void onSaveEffect(wxCommandEvent& event);
+    void onExportWave(wxCommandEvent& event);
     void onPrevEffect(wxCommandEvent& event);
     void onNextEffect(wxCommandEvent& event);
     void onAddEffect(wxCommandEvent& event);
@@ -64,7 +65,9 @@ private:
     bool mouseEditAt(int x, int y, bool left, bool right, bool hold);
     void updateHoldZone(int x, int y, bool force);
     void releaseHoldZone();
+    std::vector<AudioEngine::FrameData> buildFrameData(std::size_t effectIndex) const;
     void playEffectFrom(std::size_t startFrame);
+    bool exportEffectWave(std::size_t effectIndex, const std::filesystem::path& path);
     void togglePianoInput();
     void setPianoWindowVisible(bool visible);
 

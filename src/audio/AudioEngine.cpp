@@ -4,8 +4,7 @@
 #include <algorithm>
 #include <cstring>
 
-static constexpr int kAYClock    = 1773400;
-static constexpr int kFrameRate  = 50;
+static constexpr int kFrameRate = 50;
 
 AudioEngine::AudioEngine() {}
 
@@ -32,7 +31,20 @@ bool AudioEngine::initialize(const AudioConfig& cfg) {
         return false;
     }
 
-    m_chip.Init(kAYClock, m_config.sampleRate);
+    m_blip.set_sample_rate(m_config.sampleRate);
+    m_apu.output(&m_blip);
+    m_apu.chip_type(m_config.chipType == AyChipType::Ym2149
+                         ? Ay_Apu::Chip_Type::ym2149
+                         : Ay_Apu::Chip_Type::ay_3_8910);
+    // 0-100 maps linearly to Ay_Apu's own 0.0-1.0 scale. Measured empirically
+    // (single full-amplitude channel A, the only channel this app ever
+    // drives): clipping starts around v=1.15-1.2 on ym2149 (worse than
+    // ay_3_8910's ~1.5-1.6, since its DAC table has a higher floor relative
+    // to its ceiling), so mapping 100 -> 2.0 (the old "50 is Ay_Apu's own
+    // default" scheme) clipped audibly at high slider settings. 100 -> 1.0
+    // stays clip-free with real margin (no clipping seen up to v=1.1 in
+    // testing) on both chips.
+    m_apu.volume(m_config.volume / 100.0);
     return true;
 }
 
@@ -68,40 +80,66 @@ std::vector<std::string> AudioEngine::enumerateDevices() {
 }
 
 void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
-    m_chip.Reset(kAYClock, m_config.sampleRate);
+    m_apu.reset();
+    m_blip.clear();
+
+    const int clockRate = m_config.chipType == AyChipType::Ym2149
+                               ? kAYClockRateMsx
+                               : kAYClockRateSpectrum;
+    m_blip.clock_rate(clockRate);
+    const blip_time_t cyclesPerFrame = clockRate / kFrameRate;
+
     m_renderBuffer.clear();
+    std::vector<blip_sample_t> mono;
 
     for (const auto& f : frames) {
-        m_chip.WriteReg(0, f.tone & 0xFF);
-        m_chip.WriteReg(1, (f.tone >> 8) & 0x0F);
-        m_chip.WriteReg(6, f.noise & 0x1F);
+        m_apu.write(0, 0, f.tone & 0xFF);
+        m_apu.write(0, 1, (f.tone >> 8) & 0x0F);
+        m_apu.write(0, 6, f.noise & 0x1F);
 
         // Mixer: bits 1,2,4,5 disable B/C tone+noise; bit0=tone-A-disable, bit3=noise-A-disable
         uint8_t mixer = 0b00110110;
         if (!f.toneEnable)  mixer |= 0x01;
         if (!f.noiseEnable) mixer |= 0x08;
-        m_chip.WriteReg(7, mixer);
-        m_chip.WriteReg(8, f.volume & 0x0F);
+        m_apu.write(0, 7, mixer);
+        m_apu.write(0, 8, f.volume & 0x0F);
 
-        m_chip.Tick(kAYClock / kFrameRate);
+        m_apu.end_frame(cyclesPerFrame);
+        m_blip.end_frame(cyclesPerFrame);
 
-        int16_t frameBuf[kAudioBufferSize];
-        int count = m_chip.EndFrame(frameBuf);
-        m_renderBuffer.insert(m_renderBuffer.end(), frameBuf, frameBuf + count);
+        const long avail = m_blip.samples_avail();
+        mono.resize(avail);
+        m_blip.read_samples(mono.data(), avail);
+        for (blip_sample_t s : mono) {
+            m_renderBuffer.push_back(s);
+            m_renderBuffer.push_back(s);  // mono -> stereo
+        }
     }
 
-    // Volume scale: AY max per channel = 4096, S16 max = 32767.
-    // volume 100 → scale ~6 (~75% headroom); volume 50 → scale ~3.
-    const int scale = (m_config.volume * 6 + 50) / 100;
-    if (scale != 1) {
-        for (auto& s : m_renderBuffer) {
-            s = static_cast<int16_t>(std::clamp(static_cast<int>(s) * scale, -32768, 32767));
-        }
+    // Anti-click: linearly fade the last ~8ms to silence instead of cutting
+    // straight to the trailing zeros below. The AY/YM DAC output is never
+    // exactly zero-centred, so even after Blip_Buffer's own high-pass
+    // filtering an instant stop can leave a small but audible pop,
+    // especially right after a loud, sustained tone.
+    const int fadeFrames = std::min(static_cast<int>(m_renderBuffer.size() / 2),
+                                     m_config.sampleRate * 8 / 1000);
+    const int fadeStart = static_cast<int>(m_renderBuffer.size()) - fadeFrames * 2;
+    for (int i = 0; i < fadeFrames; ++i) {
+        const double gain = static_cast<double>(fadeFrames - i) / fadeFrames;
+        const int idx = fadeStart + i * 2;
+        m_renderBuffer[idx]     = static_cast<int16_t>(m_renderBuffer[idx] * gain);
+        m_renderBuffer[idx + 1] = static_cast<int16_t>(m_renderBuffer[idx + 1] * gain);
     }
 
     // ~100ms trailing silence so last note decays cleanly
     int silence = (m_config.sampleRate / 10) * 2;
     m_renderBuffer.insert(m_renderBuffer.end(), silence, int16_t{0});
+}
+
+std::vector<int16_t> AudioEngine::renderToPcm(const std::vector<FrameData>& frames) {
+    if (frames.empty()) return {};
+    renderFrames(frames);
+    return m_renderBuffer;
 }
 
 void AudioEngine::play(const std::vector<FrameData>& frames) {

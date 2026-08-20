@@ -5,14 +5,22 @@
 #include <vector>
 #include <atomic>
 #include <memory>
-#include "AY8910.h"
+#include "Ay_Apu.h"
+#include "Blip_Buffer.h"
 #include "miniaudio.h"
+
+static constexpr int kAudioSampleRate     = 48000;
+static constexpr int kAYClockRateSpectrum = 1773400;   // ZX Spectrum 128/+2/+3 (AY-3-8910)
+static constexpr int kAYClockRateMsx      = 3579545;   // MSX PSG, NTSC colourburst-derived (YM2149)
+
+enum class AyChipType { Ay38910, Ym2149 };
 
 struct AudioConfig {
     bool         useDefaultDevice = true;
     ma_device_id deviceId{};       // valid only when useDefaultDevice == false
     int          sampleRate = kAudioSampleRate;
     int          volume = 50;  // 0-100
+    AyChipType   chipType = AyChipType::Ay38910;  // ZX Spectrum by default
 };
 
 class AudioEngine {
@@ -38,6 +46,11 @@ public:
     void stop();
     bool isPlaying() const;
 
+    // Renders frames exactly as play() would (same chip/clock/volume, same
+    // anti-click fade and trailing silence) but returns the interleaved
+    // stereo 16-bit PCM instead of playing it, for exporting to a file.
+    std::vector<int16_t> renderToPcm(const std::vector<FrameData>& frames);
+
     const AudioConfig& config() const { return m_config; }
 
 private:
@@ -45,7 +58,8 @@ private:
     void fillOutput(int16_t* output, ma_uint32 frameCount);
     void renderFrames(const std::vector<FrameData>& frames);
 
-    AY8910                     m_chip;
+    Ay_Apu                     m_apu;
+    Blip_Buffer                m_blip;
     std::unique_ptr<ma_device> m_device;
     AudioConfig                m_config;
 

@@ -9,6 +9,7 @@ set(AYFX_REPO_ROOT "${CMAKE_SOURCE_DIR}/..")
 set(AYFX_THIRD_PARTY_DIR "${AYFX_REPO_ROOT}/third_party")
 set(DR_LIBS_DIR "${AYFX_THIRD_PARTY_DIR}/dr_libs")
 set(MINIAUDIO_DIR "${AYFX_THIRD_PARTY_DIR}/miniaudio")
+set(BLIP_AY_APU_DIR "${AYFX_THIRD_PARTY_DIR}/blip_ay_apu")
 
 option(AYFX_USE_LOCAL_WX "Use wxWidgets from support/wxWidgets-3.3.3" ON)
 
@@ -31,6 +32,10 @@ if(NOT EXISTS "${MINIAUDIO_DIR}/miniaudio.h")
     message(FATAL_ERROR "miniaudio not found at ${MINIAUDIO_DIR}. Run: git submodule update --init --recursive")
 endif()
 
+if(NOT EXISTS "${DR_LIBS_DIR}/dr_wav.h")
+    message(FATAL_ERROR "dr_libs not found at ${DR_LIBS_DIR}. Run: git submodule update --init --recursive")
+endif()
+
 add_executable(ayfxedit_wx WIN32
     app/main.cpp
     app/MainFrame.cpp
@@ -41,8 +46,12 @@ add_executable(ayfxedit_wx WIN32
     core/BankModel.cpp
     audio/AudioEngine.h
     audio/AudioEngine.cpp
-    audio/AY8910.h
-    audio/AY8910.cpp
+    audio/WaveExport.h
+    audio/WaveExport.cpp
+    ${BLIP_AY_APU_DIR}/Ay_Apu.h
+    ${BLIP_AY_APU_DIR}/Ay_Apu.cpp
+    ${BLIP_AY_APU_DIR}/Blip_Buffer.h
+    ${BLIP_AY_APU_DIR}/Blip_Buffer.cpp
 )
 
 if(WIN32)
@@ -51,16 +60,7 @@ if(WIN32)
     )
 endif()
 
-target_include_directories(ayfxedit_wx PRIVATE ${MINIAUDIO_DIR})
-
-if(EXISTS "${DR_LIBS_DIR}/dr_wav.h")
-    target_include_directories(ayfxedit_wx PRIVATE
-        ${DR_LIBS_DIR}
-    )
-    message(STATUS "Using dr_libs from ${DR_LIBS_DIR}")
-else()
-    message(STATUS "dr_libs not found at ${DR_LIBS_DIR}; continuing without it")
-endif()
+target_include_directories(ayfxedit_wx PRIVATE ${MINIAUDIO_DIR} ${BLIP_AY_APU_DIR} ${DR_LIBS_DIR})
 
 target_link_libraries(ayfxedit_wx PRIVATE
     ${AYFX_WX_LIBS}
