@@ -35,6 +35,8 @@ add_executable(ayfxedit_wx WIN32
     app/main.cpp
     app/MainFrame.cpp
     app/MainFrame.h
+    app/PianoWindow.cpp
+    app/PianoWindow.h
     core/BankModel.h
     core/BankModel.cpp
     audio/AudioEngine.h

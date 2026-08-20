@@ -1,4 +1,5 @@
 #include "MainFrame.h"
+#include "PianoWindow.h"
 
 #include <algorithm>
 #include <array>
@@ -477,11 +478,7 @@ void MainFrame::createMenu() {
     Bind(wxEVT_MENU, &MainFrame::onEditInverseSelection, this, kIdEditInverseSelection);
 
     Bind(wxEVT_MENU,
-         [this](wxCommandEvent& event) {
-             if (pianoButton_) {
-                 pianoButton_->SetValue(event.IsChecked());
-             }
-         },
+         [this](wxCommandEvent& event) { setPianoWindowVisible(event.IsChecked()); },
          kIdViewPiano);
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { periodLinear_ = true; refreshView(); }, kIdViewLinear);
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { periodLinear_ = false; refreshView(); }, kIdViewLog);
@@ -635,7 +632,7 @@ void MainFrame::createContent() {
                                             wxBitmapBundle::FromBitmap(MakePianoBitmap(panel)),
                                             wxDefaultPosition,
                                             wxSize(toolSide, toolSide));
-    pianoButton_->SetToolTip("Piano input [~]");
+    pianoButton_->SetToolTip("Piano input [Ctrl+. or Ctrl+P]");
     topBar->Add(pianoButton_, 0, wxALL, pad);
     topBar->AddSpacer(panel->FromDIP(8));
 
@@ -707,17 +704,7 @@ void MainFrame::createContent() {
     rootSizer->Add(editorPanel_, 1, wxEXPAND | wxALL, padOuter);
 
     Bind(wxEVT_BUTTON,
-         [this](wxCommandEvent&) {
-             const auto& fx = bank_.effect(currentEffect_);
-             const auto realLen = bank_.effectRealLength(currentEffect_);
-             std::vector<AudioEngine::FrameData> frames;
-             frames.reserve(realLen);
-             for (std::size_t i = 0; i < realLen; ++i) {
-                 const auto& cell = fx.frames[i];
-                 frames.push_back({cell.tone, cell.noise, cell.volume, cell.toneEnable, cell.noiseEnable});
-             }
-             audioEngine_.play(frames);
-         },
+         [this](wxCommandEvent&) { playEffectFrom(0); },
          kIdPlayEffect);
 
     Bind(wxEVT_BUTTON,
@@ -733,11 +720,7 @@ void MainFrame::createContent() {
     Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { setCurrentEffect(0); }, kIdFirstEffect);
     Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { setCurrentEffect(bank_.effectCount() - 1); }, kIdLastEffect);
     Bind(wxEVT_TOGGLEBUTTON,
-         [this](wxCommandEvent& event) {
-             if (GetMenuBar()) {
-                 GetMenuBar()->Check(kIdViewPiano, event.IsChecked());
-             }
-         },
+         [this](wxCommandEvent& event) { setPianoWindowVisible(event.IsChecked()); },
          kIdViewPiano);
     effectNameText_->Bind(wxEVT_TEXT_ENTER, &MainFrame::onApplyName, this);
     effectNameText_->Bind(wxEVT_LEFT_DOWN,
@@ -1204,6 +1187,15 @@ void MainFrame::onKeyDown(wxKeyEvent& event) {
             case 'V':
                 onEditPaste(cmd);
                 return;
+            case '.':
+            case 'P':
+                // Two alternatives standing in for the original's tilde/
+                // backtick (VK_OEM_3): that's a symbol-row key whose
+                // position and even availability shifts across keyboard
+                // layouts (e.g. Italian) and compact/laptop keyboards.
+                // Period and P are both stable across QWERTY/QWERTZ/AZERTY.
+                togglePianoInput();
+                return;
             default:
                 break;
         }
@@ -1313,6 +1305,19 @@ void MainFrame::onKeyDown(wxKeyEvent& event) {
             insertFrame(ctrl);
             refreshView();
             return;
+
+        case WXK_RETURN:
+        case WXK_NUMPAD_ENTER:
+            // Ctrl+Enter plays from the cursor row instead of frame 0,
+            // matching the original editor.
+            playEffectFrom(ctrl ? currentY_ : 0);
+            return;
+
+        case WXK_SPACE: {
+            wxCommandEvent stopEvt(wxEVT_BUTTON, kIdStopEffect);
+            ProcessWindowEvent(stopEvt);
+            return;
+        }
 
         case 'T': {
             auto& cell = bank_.effect(currentEffect_).frames[currentY_];
@@ -1837,6 +1842,73 @@ void MainFrame::releaseHoldZone() {
     if (editorPanel_) {
         editorPanel_->SetCursor(wxNullCursor);
     }
+}
+
+void MainFrame::playEffectFrom(std::size_t startFrame) {
+    const auto& fx = bank_.effect(currentEffect_);
+    const auto realLen = bank_.effectRealLength(currentEffect_);
+    if (startFrame >= realLen) {
+        return;
+    }
+
+    std::vector<AudioEngine::FrameData> frames;
+    frames.reserve(realLen - startFrame);
+    for (std::size_t i = startFrame; i < realLen; ++i) {
+        const auto& cell = fx.frames[i];
+        frames.push_back({cell.tone, cell.noise, cell.volume, cell.toneEnable, cell.noiseEnable});
+    }
+    audioEngine_.play(frames);
+}
+
+void MainFrame::togglePianoInput() {
+    if (!pianoButton_) {
+        return;
+    }
+    const bool newState = !pianoButton_->GetValue();
+    pianoButton_->SetValue(newState);
+    wxCommandEvent toggleEvt(wxEVT_TOGGLEBUTTON, kIdViewPiano);
+    toggleEvt.SetInt(newState ? 1 : 0);
+    ProcessWindowEvent(toggleEvt);
+}
+
+void MainFrame::setPianoWindowVisible(bool visible) {
+    if (!pianoWindow_) {
+        pianoWindow_ = new PianoWindow(this);
+    }
+    pianoWindow_->Show(visible);
+    syncPianoToggleState(visible);
+}
+
+void MainFrame::syncPianoToggleState(bool visible) {
+    if (pianoButton_) {
+        pianoButton_->SetValue(visible);
+    }
+    if (GetMenuBar()) {
+        GetMenuBar()->Check(kIdViewPiano, visible);
+    }
+}
+
+void MainFrame::enterFromPiano(int tonePeriod, bool setToneEnableFlag, int volume, int step, int fill) {
+    auto& fx = bank_.effect(currentEffect_);
+
+    for (int i = 0; i < fill; ++i) {
+        const auto row = currentY_ + static_cast<std::size_t>(i);
+        if (row >= BankModel::kMaxFrames) {
+            break;
+        }
+        auto& cell = fx.frames[row];
+        cell.tone = static_cast<std::uint16_t>(tonePeriod & 0x0FFF);
+        if (setToneEnableFlag) {
+            cell.toneEnable = true;
+        }
+        if (volume >= 0) {
+            cell.volume = static_cast<std::uint8_t>(volume);
+        }
+    }
+
+    currentY_ = std::min(currentY_ + static_cast<std::size_t>(step), BankModel::kMaxFrames - 1);
+    ensureCursorVisible();
+    refreshView();
 }
 
 void MainFrame::drawEditor(wxDC& dc) {

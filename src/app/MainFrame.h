@@ -11,6 +11,9 @@ class MainFrame final : public wxFrame {
 public:
     MainFrame();
 
+    void enterFromPiano(int tonePeriod, bool setToneEnableFlag, int volume, int step, int fill);
+    void syncPianoToggleState(bool visible);
+
 private:
     void createMenu();
     void createContent();
@@ -61,6 +64,9 @@ private:
     bool mouseEditAt(int x, int y, bool left, bool right, bool hold);
     void updateHoldZone(int x, int y, bool force);
     void releaseHoldZone();
+    void playEffectFrom(std::size_t startFrame);
+    void togglePianoInput();
+    void setPianoWindowVisible(bool visible);
 
     BankModel bank_;
     AudioEngine audioEngine_;
@@ -95,4 +101,5 @@ private:
     class wxMenuItem* viewLinearItem_ = nullptr;
     class wxMenuItem* viewLogItem_ = nullptr;
     bool periodLinear_ = true;
+    class PianoWindow* pianoWindow_ = nullptr;
 };
