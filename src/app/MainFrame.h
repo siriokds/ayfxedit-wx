@@ -34,6 +34,7 @@ private:
     void onImportVtx(wxCommandEvent& event);
     void onImportVgm(wxCommandEvent& event);
     void onImportWav(wxCommandEvent& event);
+    void onImportMp3(wxCommandEvent& event);
     void onMultiLoadBank(wxCommandEvent& event);
     void onMultiSaveBank(wxCommandEvent& event);
     void onPrevEffect(wxCommandEvent& event);
@@ -83,6 +84,10 @@ private:
     bool importEffectVtx(std::size_t effectIndex, const std::filesystem::path& path, int channel);
     bool importEffectVgm(std::size_t effectIndex, const std::filesystem::path& path, int channel, bool mixNoise);
     bool importEffectWav(std::size_t effectIndex, const std::filesystem::path& path);
+    bool importEffectMp3(std::size_t effectIndex, const std::filesystem::path& path);
+    bool importEffectFromPcm(std::size_t effectIndex, const std::filesystem::path& path,
+                              const std::int16_t* pcm, unsigned channels, unsigned sampleRate,
+                              std::uint64_t totalFrames);
     bool showAyChannelSelectDialog(int& channel);
     bool showSnChannelSelectDialog(int& channel, bool& mixNoise);
     void togglePianoInput();

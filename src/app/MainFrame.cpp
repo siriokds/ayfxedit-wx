@@ -3,6 +3,8 @@
 #include "../audio/WaveExport.h"
 #include "../core/VtxDecoder.h"
 #include "dr_wav.h"
+#define DR_MP3_IMPLEMENTATION
+#include "dr_mp3.h"
 
 #include <algorithm>
 #include <array>
@@ -82,6 +84,7 @@ enum : int {
     kIdImportVtx,
     kIdImportVgm,
     kIdImportWav,
+    kIdImportMp3,
     kIdMultiLoadBank,
     kIdMultiSaveBank,
     kIdExportScopeCurrent,
@@ -538,6 +541,7 @@ void MainFrame::createMenu() {
     importMenu->Append(kIdImportVtx, "VTX file...");
     importMenu->Append(kIdImportVgm, "VGM file...");
     importMenu->Append(kIdImportWav, "Wave file...");
+    importMenu->Append(kIdImportMp3, "MP3 file...");
 
     auto* exportMenu = new wxMenu();
     exportMenu->Append(kIdExportVt2, "VTII Sample...");
@@ -575,6 +579,7 @@ void MainFrame::createMenu() {
     Bind(wxEVT_MENU, &MainFrame::onImportVtx, this, kIdImportVtx);
     Bind(wxEVT_MENU, &MainFrame::onImportVgm, this, kIdImportVgm);
     Bind(wxEVT_MENU, &MainFrame::onImportWav, this, kIdImportWav);
+    Bind(wxEVT_MENU, &MainFrame::onImportMp3, this, kIdImportMp3);
     Bind(wxEVT_MENU, &MainFrame::onMultiLoadBank, this, kIdMultiLoadBank);
     Bind(wxEVT_MENU, &MainFrame::onMultiSaveBank, this, kIdMultiSaveBank);
 
@@ -1470,6 +1475,32 @@ void MainFrame::onImportWav(wxCommandEvent& event) {
 
     if (!importEffectWav(currentEffect_, selected)) {
         wxMessageBox("Can't import wave file.", "Error", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    currentOffset_ = 0;
+    currentY_ = 0;
+    currentX_ = 0;
+    clipboard_.clear();
+    refreshView();
+}
+
+void MainFrame::onImportMp3(wxCommandEvent& event) {
+    (void)event;
+
+    wxFileDialog fileDlg(this,
+                         "Load MP3 file",
+                         wxEmptyString,
+                         "",
+                         "MP3 file (*.mp3)|*.mp3|All files (*.*)|*.*",
+                         wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+    if (fileDlg.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::filesystem::path selected = fileDlg.GetPath().ToStdString();
+
+    if (!importEffectMp3(currentEffect_, selected)) {
+        wxMessageBox("Can't import MP3 file.", "Error", wxOK | wxICON_ERROR, this);
         return;
     }
 
@@ -3075,6 +3106,33 @@ bool MainFrame::importEffectWav(std::size_t effectIndex, const std::filesystem::
         return false;
     }
 
+    const bool ok = importEffectFromPcm(effectIndex, path, pcm, channels, sampleRate, totalFrames);
+    drwav_free(pcm, nullptr);
+    return ok;
+}
+
+bool MainFrame::importEffectMp3(std::size_t effectIndex, const std::filesystem::path& path) {
+    drmp3_config config{};
+    drmp3_uint64 totalFrames = 0;
+    // Same shared pitch-tuner core as importEffectWav (see there for why
+    // dr_wav/dr_mp3 are used instead of hand-rolled parsers) -- the
+    // original ayfxedit never had MP3 import at all, so there's no
+    // upstream behavior to match here beyond the tuner algorithm itself.
+    drmp3_int16* pcm = drmp3_open_file_and_read_pcm_frames_s16(
+        path.string().c_str(), &config, &totalFrames, nullptr);
+    if (!pcm || config.channels == 0 || config.sampleRate == 0 || totalFrames == 0) {
+        if (pcm) drmp3_free(pcm, nullptr);
+        return false;
+    }
+
+    const bool ok = importEffectFromPcm(effectIndex, path, pcm, config.channels, config.sampleRate, totalFrames);
+    drmp3_free(pcm, nullptr);
+    return ok;
+}
+
+bool MainFrame::importEffectFromPcm(std::size_t effectIndex, const std::filesystem::path& path,
+                                     const std::int16_t* pcm, unsigned channels, unsigned sampleRate,
+                                     std::uint64_t totalFrames) {
     constexpr int kFrameSamples = 44100 / 50;
     constexpr int kFramesLookAhead = 2;
 
@@ -3084,7 +3142,6 @@ bool MainFrame::importEffectWav(std::size_t effectIndex, const std::filesystem::
     }
     waveLength += kFrameSamples * (kFramesLookAhead - 1);
     if (waveLength <= 0) {
-        drwav_free(pcm, nullptr);
         return false;
     }
 
@@ -3120,7 +3177,6 @@ bool MainFrame::importEffectWav(std::size_t effectIndex, const std::filesystem::
             s = static_cast<std::int16_t>(static_cast<float>(s) * preMul);
         }
     }
-    drwav_free(pcm, nullptr);
 
     // Separate post-normalisation pass: find the loudest AY-frame (by
     // average absolute amplitude over the tuner's 2-frame lookahead window)
