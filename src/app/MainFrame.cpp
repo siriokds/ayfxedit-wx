@@ -211,6 +211,37 @@ wxRect MakeEditorTextRect(const wxWindow* w, int x, int y, const wxString& text,
     return wxRect(x - padX, y, size.GetWidth() + padX * 2, lineHeight);
 }
 
+struct EditorPalette {
+    wxColour background;  // editor panel background
+    wxColour text;        // normal cell text
+    wxColour barFill;     // bar fill colour
+    wxColour barBorder;   // bar rectangle border
+    wxColour selection;   // selected row background
+    wxColour cursorBg;    // active cell highlight background
+    wxColour cursorText;  // active cell highlight text
+    wxColour iconFg;      // toolbar icon foreground (stop square, piano keys)
+    wxColour iconBg;      // toolbar icon background (white keys on piano)
+    wxColour playFill;    // play triangle fill
+    wxColour playBorder;  // play triangle border
+
+    static const EditorPalette& light() {
+        static const EditorPalette p = {
+            wxColour(255, 255, 255),  // background
+            wxColour(  0,   0,   0),  // text
+            wxColour(128, 128, 128),  // barFill
+            wxColour(  0,   0,   0),  // barBorder
+            wxColour(192, 255, 192),  // selection
+            wxColour(  0,   0,   0),  // cursorBg
+            wxColour(255, 255, 255),  // cursorText
+            wxColour(  0,   0,   0),  // iconFg
+            wxColour(255, 255, 255),  // iconBg
+            wxColour(  0, 185,   0),  // playFill
+            wxColour( 30, 120,  30),  // playBorder
+        };
+        return p;
+    }
+};
+
 wxBitmap CreateToolbarBitmap(const wxWindow* w) {
     const int s = Dip(w, 22);
     wxBitmap bmp(s, s, 32);
@@ -223,11 +254,12 @@ wxBitmap CreateToolbarBitmap(const wxWindow* w) {
 }
 
 wxBitmap MakePlayBitmap(const wxWindow* w) {
+    const EditorPalette& pal = EditorPalette::light();
     wxBitmap bmp = CreateToolbarBitmap(w);
     wxMemoryDC mdc;
     mdc.SelectObject(bmp);
     mdc.SetPen(*wxTRANSPARENT_PEN);
-    mdc.SetBrush(wxBrush(wxColour(0, 185, 0)));
+    mdc.SetBrush(wxBrush(pal.playFill));
 
     const int x0 = Dip(w, 6);
     const int y0 = Dip(w, 4);
@@ -238,7 +270,7 @@ wxBitmap MakePlayBitmap(const wxWindow* w) {
     wxPoint pts[3] = {wxPoint(x0, y0), wxPoint(x1, y1), wxPoint(x2, y2)};
     mdc.DrawPolygon(3, pts);
 
-    mdc.SetPen(wxPen(wxColour(30, 120, 30), std::max(1, Dip(w, 1))));
+    mdc.SetPen(wxPen(pal.playBorder, std::max(1, Dip(w, 1))));
     mdc.SetBrush(*wxTRANSPARENT_BRUSH);
     mdc.DrawPolygon(3, pts);
     mdc.SelectObject(wxNullBitmap);
@@ -246,19 +278,21 @@ wxBitmap MakePlayBitmap(const wxWindow* w) {
 }
 
 wxBitmap MakeStopBitmap(const wxWindow* w) {
+    const EditorPalette& pal = EditorPalette::light();
     wxBitmap bmp = CreateToolbarBitmap(w);
     wxMemoryDC mdc;
     mdc.SelectObject(bmp);
     const int pad = Dip(w, 5);
     const int side = std::max(1, Dip(w, 12));
-    mdc.SetPen(wxPen(*wxBLACK, std::max(1, Dip(w, 1))));
-    mdc.SetBrush(*wxBLACK_BRUSH);
+    mdc.SetPen(wxPen(pal.iconFg, std::max(1, Dip(w, 1))));
+    mdc.SetBrush(wxBrush(pal.iconFg));
     mdc.DrawRectangle(pad, pad, side, side);
     mdc.SelectObject(wxNullBitmap);
     return bmp;
 }
 
 wxBitmap MakePianoBitmap(const wxWindow* w) {
+    const EditorPalette& pal = EditorPalette::light();
     wxBitmap bmp = CreateToolbarBitmap(w);
     wxMemoryDC mdc;
     mdc.SelectObject(bmp);
@@ -269,8 +303,8 @@ wxBitmap MakePianoBitmap(const wxWindow* w) {
     const int hgt = std::max(1, Dip(w, 16));
     const int keyW = std::max(1, wdt / 5);
 
-    mdc.SetPen(wxPen(*wxBLACK, std::max(1, Dip(w, 1))));
-    mdc.SetBrush(*wxWHITE_BRUSH);
+    mdc.SetPen(wxPen(pal.iconFg, std::max(1, Dip(w, 1))));
+    mdc.SetBrush(wxBrush(pal.iconBg));
     mdc.DrawRectangle(x, y, wdt, hgt);
 
     for (int i = 1; i < 5; ++i) {
@@ -278,7 +312,7 @@ wxBitmap MakePianoBitmap(const wxWindow* w) {
         mdc.DrawLine(xx, y + Dip(w, 8), xx, y + hgt - 1);
     }
 
-    mdc.SetBrush(*wxBLACK_BRUSH);
+    mdc.SetBrush(wxBrush(pal.iconFg));
     const int bW = std::max(1, keyW / 2);
     const int bH = std::max(1, Dip(w, 7));
     mdc.DrawRectangle(x + keyW - bW / 2, y, bW, bH);
@@ -1721,10 +1755,11 @@ void MainFrame::drawEditor(wxDC& dc) {
         return;
     }
 
-    const wxColour colBackground(*wxWHITE);
-    const wxColour colBarFill(128, 128, 128);
-    const wxColour colTextActive(*wxBLACK);
-    const wxColour colSelected(0xC0, 0xFF, 0xC0);
+    const EditorPalette& pal = EditorPalette::light();
+    const wxColour& colBackground = pal.background;
+    const wxColour& colBarFill    = pal.barFill;
+    const wxColour& colTextActive = pal.text;
+    const wxColour& colSelected   = pal.selection;
 
     dc.SetBackground(wxBrush(colBackground));
     dc.Clear();
@@ -1800,10 +1835,10 @@ void MainFrame::drawEditor(wxDC& dc) {
                 wxCoord tw = 0;
                 wxCoord th = 0;
                 dc.GetTextExtent(text, &tw, &th);
-                dc.SetBrush(*wxBLACK_BRUSH);
-                dc.SetPen(*wxBLACK_PEN);
+                dc.SetBrush(wxBrush(pal.cursorBg));
+                dc.SetPen(wxPen(pal.cursorBg));
                 dc.DrawRectangle(x, y, tw, lineH);
-                dc.SetTextForeground(*wxWHITE);
+                dc.SetTextForeground(pal.cursorText);
                 dc.DrawText(text, x, y);
                 dc.SetTextForeground(textCol);
             } else {
@@ -1819,7 +1854,7 @@ void MainFrame::drawEditor(wxDC& dc) {
         const int bh = lineH - barPad * 2;
 
         dc.SetBrush(wxBrush(back));
-        dc.SetPen(*wxBLACK_PEN);
+        dc.SetPen(wxPen(pal.barBorder));
         dc.DrawRectangle(xOff + toneOff,  y + barPad, toneW,  bh);
         dc.DrawRectangle(xOff + noiseOff, y + barPad, noiseW, bh);
         dc.DrawRectangle(xOff + volOff,   y + barPad, volW,   bh);
