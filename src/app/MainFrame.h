@@ -18,6 +18,7 @@ private:
     void createMenu();
     void createContent();
     void refreshView();
+    void updateAudioStatus();
     void updateTitle();
     void drawEditor(class wxDC& dc);
 

@@ -216,6 +216,24 @@ int ReclockFitOctaveShift(double period, int maxValue) {
     return std::clamp(static_cast<int>(std::llround(period)), 0, maxValue);
 }
 
+struct MachinePreset { const char* label; int clockHz; };
+static const MachinePreset kMachinePresets[] = {
+    {"ZX Spectrum", kAYClockRateSpectrum},
+    {"MSX", kAYClockRateMsx},
+    {"Amstrad CPC", kAYClockRateCpc},
+    {"Atari ST", kAYClockRateAtariSt},
+};
+constexpr int kMachinePresetCount = static_cast<int>(std::size(kMachinePresets));
+
+// Used by the status bar summary: the preset name for a clock value, or
+// "Custom" if it doesn't match one of the known machine presets exactly.
+const char* MachineNameForClock(int clockHz) {
+    for (const auto& p : kMachinePresets) {
+        if (p.clockHz == clockHz) return p.label;
+    }
+    return "Custom";
+}
+
 // Preset + numeric-Hz widget pair shared between Audio Settings' "Machine"
 // picker and the reclock tool's source/destination pickers. Picking a
 // preset fills in the spin control; hand-editing the spin control (to a
@@ -226,14 +244,8 @@ struct ClockPicker {
 };
 
 ClockPicker CreateClockPicker(wxWindow* parent, int initialHz) {
-    struct MachinePreset { const char* label; int clockHz; };
-    static const MachinePreset kPresets[] = {
-        {"ZX Spectrum", kAYClockRateSpectrum},
-        {"MSX", kAYClockRateMsx},
-        {"Amstrad CPC", kAYClockRateCpc},
-        {"Atari ST", kAYClockRateAtariSt},
-    };
-    constexpr int kPresetCount = static_cast<int>(std::size(kPresets));
+    const auto& kPresets = kMachinePresets;
+    const int kPresetCount = kMachinePresetCount;
 
     auto* machineChoice = new wxChoice(parent, wxID_ANY);
     for (const auto& p : kPresets) machineChoice->Append(p.label);
@@ -593,9 +605,35 @@ MainFrame::MainFrame()
     SetMinSize(minSize);
     audioEngine_.initialize();
     createMenu();
-    CreateStatusBar(1);
+    CreateStatusBar(2);
+    const int audioFieldWidth = FromDIP(280);
+    const int statusWidths[2] = {-1, audioFieldWidth};
+    GetStatusBar()->SetStatusWidths(2, statusWidths);
+    updateAudioStatus();
     createContent();
     refreshView();
+}
+
+void MainFrame::updateAudioStatus() {
+    // Deferred via CallAfter: runs on the next idle pass instead of
+    // blocking whatever just changed the audio config (e.g. reconfigure(),
+    // which can briefly stall reinitialising the device) -- low latency
+    // from the user's perspective (next event-loop tick), but low priority
+    // relative to whatever's already in flight.
+    CallAfter([this]() {
+        if (!GetStatusBar()) {
+            return;
+        }
+        const AudioConfig& cfg = audioEngine_.config();
+        wxString status;
+        status << (cfg.chipType == AyChipType::Ym2149 ? "YM2149" : "AY-3-8910")
+               << " · " << MachineNameForClock(cfg.clockHz)
+               << " · " << wxString::Format("%d Hz", cfg.sampleRate);
+        if (cfg.lowpassHz > 0) {
+            status << " · LP " << wxString::Format("%dHz", cfg.lowpassHz);
+        }
+        SetStatusText(status, 1);
+    });
 }
 
 void MainFrame::createMenu() {
@@ -850,6 +888,7 @@ void MainFrame::createMenu() {
              // Device: selection 0 = default
              cfg.useDefaultDevice = true;
              audioEngine_.reconfigure(cfg);
+             updateAudioStatus();
          },
          kIdAudioSettings);
 
