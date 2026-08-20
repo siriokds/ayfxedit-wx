@@ -2,11 +2,13 @@
 #include "PianoWindow.h"
 #include "../audio/WaveExport.h"
 #include "../core/VtxDecoder.h"
+#include "dr_wav.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <string>
@@ -79,6 +81,7 @@ enum : int {
     kIdImportPsg,
     kIdImportVtx,
     kIdImportVgm,
+    kIdImportWav,
     kIdMultiLoadBank,
     kIdMultiSaveBank,
     kIdExportScopeCurrent,
@@ -109,6 +112,79 @@ std::array<int, 8 * 12 + 1> BuildVt2OffsetTable() {
     }
     return offset;
 }
+
+// WAV import / pitch tuner, ported from the original's import_wav.h. The
+// original credits it as "a C version of Java 5KTuner by John Montgomery,
+// CC-BY 2008". It's an AMDF-style (average magnitude difference function)
+// pitch detector: for each candidate lag i, sum |a[j]-a[i+j]| over the
+// whole window (treating positions past the end as a comparison against
+// silence), and take the first lag where that sum stops falling and starts
+// rising, once it has dropped under half the running maximum. `wave` is
+// read as consecutive *pairs* summed together (halving the effective
+// sample count) purely to keep the O(len^2) inner loop cheap -- ported
+// exactly, including that the returned frequency is `rate/sampleLen` with
+// the un-halved rate against the halved-domain lag (not `rate/(2*sampleLen)`
+// as pitch theory alone would suggest) -- an original quirk, not something
+// to "fix" while porting.
+double TunerAnalyze(const std::int16_t* wave, std::vector<int>& scratch, int rate, int len) {
+    len >>= 1;
+    if (len <= 0) {
+        return 0.0;
+    }
+    if (static_cast<int>(scratch.size()) < len) {
+        scratch.resize(len);
+    }
+
+    int ptr = 0;
+    for (int i = 0; i < len; ++i) {
+        scratch[i] = wave[ptr] + wave[ptr + 1];
+        ptr += 2;
+    }
+
+    double prevDiff = 0.0;
+    double prevDx = 0.0;
+    double maxDiff = 0.0;
+    int sampleLen = 0;
+
+    for (int i = 0; i < len; ++i) {
+        double diff = 0.0;
+        for (int j = 0; j < len; ++j) {
+            diff += (i + j < len) ? std::abs(scratch[j] - scratch[i + j]) : std::abs(scratch[j]);
+        }
+
+        const double dx = prevDiff - diff;
+        if (dx < 0 && prevDx > 0 && diff < 0.5 * maxDiff) {
+            sampleLen = i - 1;
+            break;
+        }
+
+        prevDx = dx;
+        prevDiff = diff;
+        if (diff > maxDiff) {
+            maxDiff = diff;
+        }
+    }
+
+    if (sampleLen <= 0) {
+        return 0.0;
+    }
+    return static_cast<double>(rate) / static_cast<double>(sampleLen);
+}
+
+// Verbatim from the original: a 256-entry perceptual (roughly logarithmic)
+// curve mapping a normalised frame amplitude down to the AY's 4-bit (0-15)
+// volume range, giving more resolution to quiet sounds than a linear scale
+// would.
+constexpr std::array<std::uint8_t, 256> kAyVolTab = {
+    0,1,1,2,3,3,4,4,4,5,5,5,6,6,6,6,6,7,7,7,7,7,7,7,8,8,8,8,8,8,8,8,9,9,9,9,9,9,9,9,9,9,9,9,9,
+    10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,11,11,11,11,11,11,11,11,11,11,11,11,11,11,11,
+    11,11,11,11,11,11,11,11,11,11,11,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,
+    12,12,12,12,12,12,12,12,12,12,12,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,
+    13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,13,
+    14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,
+    14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,15,15,15,15,15,15,
+    15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,
+};
 
 struct EditorLayout {
     static constexpr int kXOff = 4;
@@ -461,7 +537,7 @@ void MainFrame::createMenu() {
     importMenu->Append(kIdImportPsg, "PSG for AY...");
     importMenu->Append(kIdImportVtx, "VTX file...");
     importMenu->Append(kIdImportVgm, "VGM file...");
-    importMenu->Append(kIdNotImplemented, "Wave file...");
+    importMenu->Append(kIdImportWav, "Wave file...");
 
     auto* exportMenu = new wxMenu();
     exportMenu->Append(kIdExportVt2, "VTII Sample...");
@@ -498,6 +574,7 @@ void MainFrame::createMenu() {
     Bind(wxEVT_MENU, &MainFrame::onImportPsg, this, kIdImportPsg);
     Bind(wxEVT_MENU, &MainFrame::onImportVtx, this, kIdImportVtx);
     Bind(wxEVT_MENU, &MainFrame::onImportVgm, this, kIdImportVgm);
+    Bind(wxEVT_MENU, &MainFrame::onImportWav, this, kIdImportWav);
     Bind(wxEVT_MENU, &MainFrame::onMultiLoadBank, this, kIdMultiLoadBank);
     Bind(wxEVT_MENU, &MainFrame::onMultiSaveBank, this, kIdMultiSaveBank);
 
@@ -1367,6 +1444,32 @@ void MainFrame::onImportVgm(wxCommandEvent& event) {
 
     if (!importEffectVgm(currentEffect_, selected, channel, mixNoise)) {
         wxMessageBox("Can't import VGM file.", "Error", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    currentOffset_ = 0;
+    currentY_ = 0;
+    currentX_ = 0;
+    clipboard_.clear();
+    refreshView();
+}
+
+void MainFrame::onImportWav(wxCommandEvent& event) {
+    (void)event;
+
+    wxFileDialog fileDlg(this,
+                         "Load wave file",
+                         wxEmptyString,
+                         "",
+                         "Wave file (*.wav)|*.wav|All files (*.*)|*.*",
+                         wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+    if (fileDlg.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::filesystem::path selected = fileDlg.GetPath().ToStdString();
+
+    if (!importEffectWav(currentEffect_, selected)) {
+        wxMessageBox("Can't import wave file.", "Error", wxOK | wxICON_ERROR, this);
         return;
     }
 
@@ -2945,6 +3048,131 @@ bool MainFrame::importEffectVgm(std::size_t effectIndex, const std::filesystem::
                 }
             }
         }
+    }
+
+    fx.name = path.stem().string();
+    return true;
+}
+
+bool MainFrame::importEffectWav(std::size_t effectIndex, const std::filesystem::path& path) {
+    unsigned int channels = 0;
+    unsigned int sampleRate = 0;
+    drwav_uint64 totalFrames = 0;
+    // Uses dr_wav instead of the original's hand-rolled RIFF scanner (same
+    // one used for WAV export) -- it's a pure file-parsing robustness
+    // upgrade (handles more source formats/layouts correctly, e.g. 24/32-bit
+    // and float PCM, chunks in any order), not a change to the actual
+    // pitch/volume analysis below. dr_wav also reports an accurate
+    // per-channel frame count, which sidesteps a latent bug in the
+    // original for stereo input: it derived "frame count" from the data
+    // chunk's byte length divided only by bytes-per-sample (not also by
+    // channel count), so a stereo file's target duration came out roughly
+    // 2x too long there.
+    drwav_int16* pcm = drwav_open_file_and_read_pcm_frames_s16(
+        path.string().c_str(), &channels, &sampleRate, &totalFrames, nullptr);
+    if (!pcm || channels == 0 || sampleRate == 0 || totalFrames == 0) {
+        if (pcm) drwav_free(pcm, nullptr);
+        return false;
+    }
+
+    constexpr int kFrameSamples = 44100 / 50;
+    constexpr int kFramesLookAhead = 2;
+
+    int waveLength = static_cast<int>(static_cast<double>(totalFrames) / sampleRate * 44100.0);
+    if ((waveLength % kFrameSamples) > 0) {
+        waveLength = waveLength / kFrameSamples * kFrameSamples + kFrameSamples;
+    }
+    waveLength += kFrameSamples * (kFramesLookAhead - 1);
+    if (waveLength <= 0) {
+        drwav_free(pcm, nullptr);
+        return false;
+    }
+
+    // Resample to 44.1kHz mono via crude nearest-neighbour lookup (matches
+    // the original -- no interpolation), downmixing channels by averaging.
+    std::vector<std::int16_t> waveData(static_cast<std::size_t>(waveLength), 0);
+    {
+        const float fstep = static_cast<float>(totalFrames) / static_cast<float>(waveLength);
+        float fptr = 0.0f;
+        int minV = 0xFFFF;
+        int maxV = -0xFFFF;
+        for (int i = 0; i < waveLength; ++i) {
+            const int frameIdx = static_cast<int>(fptr);
+            int smp = 0;
+            if (frameIdx < static_cast<int>(totalFrames)) {
+                int sum = 0;
+                for (unsigned c = 0; c < channels; ++c) {
+                    sum += pcm[static_cast<std::size_t>(frameIdx) * channels + c];
+                }
+                smp = sum / static_cast<int>(channels);
+                if (smp > maxV) maxV = smp;
+                if (smp < minV) minV = smp;
+            }
+            waveData[static_cast<std::size_t>(i)] = static_cast<std::int16_t>(smp);
+            fptr += fstep;
+        }
+
+        // Pre-normalise so the source's full dynamic range maps to 16 bits
+        // before pitch/volume analysis -- helps quiet recordings analyze
+        // correctly.
+        const float preMul = (maxV - minV > 0) ? (65535.0f / static_cast<float>(maxV - minV)) : 1.0f;
+        for (auto& s : waveData) {
+            s = static_cast<std::int16_t>(static_cast<float>(s) * preMul);
+        }
+    }
+    drwav_free(pcm, nullptr);
+
+    // Separate post-normalisation pass: find the loudest AY-frame (by
+    // average absolute amplitude over the tuner's 2-frame lookahead window)
+    // and scale so it maps close to full scale.
+    int maxAvg = 1;
+    for (int p = 0; p < waveLength - kFrameSamples * (kFramesLookAhead - 1); p += kFrameSamples) {
+        long sum = 0;
+        for (int i = 0; i < kFrameSamples * kFramesLookAhead; ++i) {
+            sum += std::abs(static_cast<int>(waveData[static_cast<std::size_t>(p + i)]));
+        }
+        const int avg = static_cast<int>(sum / (kFrameSamples * kFramesLookAhead));
+        if (avg > maxAvg) maxAvg = avg;
+    }
+    const float postMul = 32768.0f / static_cast<float>(maxAvg);
+
+    auto& fx = bank_.effect(effectIndex);
+    auto& outFrames = fx.frames;
+    std::fill(outFrames.begin(), outFrames.end(), AyfxCell{});
+    const std::size_t maxFrames = outFrames.size();
+    std::size_t pd = 0;
+
+    std::vector<int> tunerScratch;
+    for (int p = 0; p < waveLength - kFrameSamples * (kFramesLookAhead - 1); p += kFrameSamples) {
+        if (pd >= maxFrames) {
+            break;
+        }
+
+        double ffrq = TunerAnalyze(&waveData[static_cast<std::size_t>(p)], tunerScratch,
+                                    44100, kFrameSamples * kFramesLookAhead);
+        if (ffrq <= 0.0) {
+            ffrq = 0.0001;  // avoid division by zero
+        }
+
+        int freq = static_cast<int>(kAYClockRateSpectrum / 8.0 / ffrq);
+        freq = std::clamp(freq, 0, 4095);
+
+        long volSum = 0;
+        for (int i = 0; i < kFrameSamples; ++i) {
+            volSum += std::abs(static_cast<int>(waveData[static_cast<std::size_t>(p + i)]));
+        }
+        int smp = static_cast<int>(volSum / kFrameSamples);
+        smp = static_cast<int>(static_cast<float>(smp) * postMul);
+        smp >>= 7;
+        smp = std::clamp(smp, 0, 255);
+
+        AyfxCell cell;
+        cell.tone = static_cast<std::uint16_t>(freq);
+        cell.noise = static_cast<std::uint8_t>(freq >> 7);
+        cell.volume = kAyVolTab[static_cast<std::size_t>(smp)];
+        cell.toneEnable = true;
+        cell.noiseEnable = (freq == 0);
+        outFrames[pd++] = cell;
     }
 
     fx.name = path.stem().string();
