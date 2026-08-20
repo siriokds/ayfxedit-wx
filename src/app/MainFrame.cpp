@@ -800,7 +800,23 @@ void MainFrame::createMenu() {
              auto* clockSpin = clockPicker.clockSpin;
              auto* clockLabel = new wxStaticText(&dlg, wxID_ANY, "Clock (Hz):");
 
-             auto* grid = new wxFlexGridSizer(6, 2, 6, 10);
+             // Extra low-pass, on top of whatever the output rate's own
+             // Nyquist already implies -- e.g. to approximate a real
+             // machine's analog output stage rolling off high frequencies.
+             // Off (0) by default: the resampler's own Nyquist-based cutoff
+             // already removes anything truly ultrasonic.
+             auto* lowpassCheck = new wxCheckBox(&dlg, wxID_ANY, "Extra low-pass filter:");
+             lowpassCheck->SetValue(cur.lowpassHz > 0);
+             auto* lowpassSpin = new wxSpinCtrl(&dlg, wxID_ANY, wxEmptyString,
+                                                wxDefaultPosition, wxDefaultSize,
+                                                wxSP_ARROW_KEYS, 1000, 40000,
+                                                cur.lowpassHz > 0 ? cur.lowpassHz : 18000);
+             lowpassSpin->Enable(lowpassCheck->GetValue());
+             lowpassCheck->Bind(wxEVT_CHECKBOX, [=](wxCommandEvent&) {
+                 lowpassSpin->Enable(lowpassCheck->GetValue());
+             });
+
+             auto* grid = new wxFlexGridSizer(7, 2, 6, 10);
              grid->AddGrowableCol(1, 1);
              grid->Add(devLabel,  0, wxALIGN_CENTER_VERTICAL);
              grid->Add(devChoice, 1, wxEXPAND);
@@ -814,6 +830,8 @@ void MainFrame::createMenu() {
              grid->Add(machineChoice, 1, wxEXPAND);
              grid->Add(clockLabel, 0, wxALIGN_CENTER_VERTICAL);
              grid->Add(clockSpin, 1, wxEXPAND);
+             grid->Add(lowpassCheck, 0, wxALIGN_CENTER_VERTICAL);
+             grid->Add(lowpassSpin, 1, wxEXPAND);
 
              vs->Add(grid, 1, wxEXPAND | wxALL, 12);
              vs->Add(dlg.CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0,
@@ -828,6 +846,7 @@ void MainFrame::createMenu() {
              cfg.volume     = volSlider->GetValue();
              cfg.chipType   = chipChoice->GetSelection() == 1 ? AyChipType::Ym2149 : AyChipType::Ay38910;
              cfg.clockHz    = clockSpin->GetValue();
+             cfg.lowpassHz  = lowpassCheck->GetValue() ? lowpassSpin->GetValue() : 0;
              // Device: selection 0 = default
              cfg.useDefaultDevice = true;
              audioEngine_.reconfigure(cfg);

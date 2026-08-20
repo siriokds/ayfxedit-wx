@@ -2,9 +2,96 @@
 #include "miniaudio.h"
 #include "AudioEngine.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <vector>
 
 static constexpr int kFrameRate = 50;
+
+// Always synthesize at this internal rate, then band-limit-downsample to
+// whatever the configured output rate is (see ResampleSinc below). Blip_Buffer
+// is already a band-limited synthesizer, but its own kernel still has to draw
+// a hard line at *some* Nyquist; rendering well above any real output rate
+// first gives a lot of headroom before anything near-ultrasonic (e.g. a
+// near-zero AY tone period) has to be filtered at all, then the final
+// downsample below is a clean, well-defined FIR lowpass rather than relying
+// on Blip_Buffer's synthesis alone to be alias-free at the target rate.
+// Rendering is one-shot/offline here (a full effect renders in well under a
+// second), so the extra cost of oversampling + a 64-tap filter is immaterial.
+static constexpr int kOversampleRate = 192000;
+
+namespace {
+
+// 64-tap windowed-sinc resampler (Blackman 3-term window, DC-normalised),
+// ported from the user's own mdsp::WindowedSinc64 (MarsDesktop,
+// engine/dsp/windowed_sinc.h). Simplified for this app's one-shot offline
+// use: MarsDesktop's version precomputes a 1024-phase x 8-cutoff-bank SIMD
+// table to avoid any sin/cos in a real-time variable-rate playback
+// callback; here the resample ratio is fixed and known up front and this
+// isn't a real-time path, so each output sample's kernel is just computed
+// directly instead.
+std::vector<int16_t> ResampleSinc(const std::vector<int16_t>& input, double inRate, double outRate,
+                                   double extraCutoffHz = 0.0) {
+    if (input.empty() || inRate <= 0.0 || outRate <= 0.0) {
+        return {};
+    }
+    if (inRate == outRate && extraCutoffHz <= 0.0) {
+        return input;
+    }
+
+    constexpr int kTaps = 64;
+    constexpr int kLeft = 31;
+    constexpr double kPi = 3.1415926535897932384626433832795;
+
+    const double ratio = outRate / inRate;
+    // Cutoff normalised to the input rate. This app only ever downsamples
+    // (oversampleRate -> a lower output rate), so ratio < 1 and this is the
+    // anti-alias lowpass cutoff; the >0.5 clamp just guards the unused
+    // upsampling case (nothing above the input's own Nyquist to preserve).
+    // extraCutoffHz, if set, tightens this further -- e.g. to model a real
+    // machine's analog output stage rolling off high frequencies, rather
+    // than just however much filtering the output rate's own Nyquist
+    // happens to imply.
+    double cutoff = std::min(0.5, ratio * 0.5);
+    if (extraCutoffHz > 0.0) {
+        cutoff = std::min(cutoff, extraCutoffHz / inRate);
+    }
+
+    const std::size_t outLen = static_cast<std::size_t>(std::llround(static_cast<double>(input.size()) * ratio));
+    std::vector<int16_t> output(outLen);
+
+    for (std::size_t i = 0; i < outLen; ++i) {
+        const double pos = static_cast<double>(i) / ratio;  // position in input-sample units
+        const double ip = std::floor(pos);
+        const double frac = pos - ip;
+        const int base = static_cast<int>(ip) - kLeft;
+
+        double sum = 0.0;
+        double norm = 0.0;
+        for (int k = 0; k < kTaps; ++k) {
+            const double x = static_cast<double>(k - kLeft) - frac;
+            const double z = cutoff * x;
+            const double sinc = std::abs(z) < 1e-12 ? 1.0 : std::sin(kPi * z) / (kPi * z);
+            const double q = x / (kTaps * 0.5);
+            const double win = std::abs(q) <= 1.0
+                ? 0.42 + 0.5 * std::cos(kPi * q) + 0.08 * std::cos(2.0 * kPi * q)
+                : 0.0;
+            const double h = cutoff * sinc * win;
+            norm += h;
+
+            const int idx = base + k;
+            if (idx >= 0 && idx < static_cast<int>(input.size())) {
+                sum += h * input[idx];
+            }
+        }
+        const double gain = std::abs(norm) > 1e-20 ? 1.0 / norm : 1.0;
+        output[i] = static_cast<int16_t>(std::clamp(sum * gain, -32768.0, 32767.0));
+    }
+
+    return output;
+}
+
+}  // namespace
 
 AudioEngine::AudioEngine() {}
 
@@ -31,7 +118,7 @@ bool AudioEngine::initialize(const AudioConfig& cfg) {
         return false;
     }
 
-    m_blip.set_sample_rate(m_config.sampleRate);
+    m_blip.set_sample_rate(kOversampleRate);
     m_apu.output(&m_blip);
     m_apu.chip_type(m_config.chipType == AyChipType::Ym2149
                          ? Ay_Apu::Chip_Type::ym2149
@@ -85,6 +172,7 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
 
     const int clockRate = m_config.clockHz;
     m_blip.clock_rate(clockRate);
+    m_blip.set_sample_rate(kOversampleRate);
     const blip_time_t cyclesPerFrame = clockRate / kFrameRate;
 
     // Matches Ay_Apu::run_until()'s own inaudible_period threshold: periods
@@ -102,9 +190,9 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
         return f.toneEnable && period <= inaudiblePeriod;
     };
 
-    m_renderBuffer.clear();
+    std::vector<int16_t> monoOversampled;
     std::vector<blip_sample_t> mono;
-    std::vector<std::size_t> declickBoundaries;  // stereo-frame indices to smooth
+    std::vector<std::size_t> declickBoundaries;  // indices into monoOversampled to smooth
     bool prevInaudible = false;
 
     for (std::size_t fi = 0; fi < frames.size(); ++fi) {
@@ -128,7 +216,7 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
         // hard edge to the new constant level, same as a state change does.
         const bool nowInaudible = isInaudibleTone(f);
         if (fi > 0 && (nowInaudible || prevInaudible)) {
-            declickBoundaries.push_back(m_renderBuffer.size() / 2);
+            declickBoundaries.push_back(monoOversampled.size());
         }
         prevInaudible = nowInaudible;
 
@@ -138,10 +226,7 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
         const long avail = m_blip.samples_avail();
         mono.resize(avail);
         m_blip.read_samples(mono.data(), avail);
-        for (blip_sample_t s : mono) {
-            m_renderBuffer.push_back(s);
-            m_renderBuffer.push_back(s);  // mono -> stereo
-        }
+        monoOversampled.insert(monoOversampled.end(), mono.begin(), mono.end());
     }
 
     // Smooth each such transition with a short (~1ms) ramp from the last
@@ -149,21 +234,30 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
     // of leaving Blip_Buffer's single hard edge there -- a continuous-time
     // output wouldn't jump instantly either.
     {
-        const int rampLen = std::max(1, m_config.sampleRate / 1000);
-        const std::size_t totalFrames = m_renderBuffer.size() / 2;
+        const int rampLen = std::max(1, kOversampleRate / 1000);
+        const std::size_t total = monoOversampled.size();
         for (std::size_t b : declickBoundaries) {
-            if (b == 0 || b >= totalFrames) continue;
-            const double before = m_renderBuffer[(b - 1) * 2];
-            const std::size_t rampEnd = std::min(b + static_cast<std::size_t>(rampLen), totalFrames);
+            if (b == 0 || b >= total) continue;
+            const double before = monoOversampled[b - 1];
+            const std::size_t rampEnd = std::min(b + static_cast<std::size_t>(rampLen), total);
             for (std::size_t i = b; i < rampEnd; ++i) {
                 const double t = static_cast<double>(i - b + 1) / static_cast<double>(rampEnd - b + 1);
-                const double target = m_renderBuffer[i * 2];
+                const double target = monoOversampled[i];
                 const double blended = before + (target - before) * t;
-                const auto v = static_cast<int16_t>(std::clamp(blended, -32768.0, 32767.0));
-                m_renderBuffer[i * 2]     = v;
-                m_renderBuffer[i * 2 + 1] = v;
+                monoOversampled[i] = static_cast<int16_t>(std::clamp(blended, -32768.0, 32767.0));
             }
         }
+    }
+
+    // Downsample from kOversampleRate to the configured output rate through
+    // the windowed-sinc filter, then duplicate to stereo.
+    const std::vector<int16_t> monoFinal = ResampleSinc(monoOversampled, kOversampleRate, m_config.sampleRate,
+                                                          m_config.lowpassHz);
+    m_renderBuffer.clear();
+    m_renderBuffer.reserve(monoFinal.size() * 2);
+    for (int16_t s : monoFinal) {
+        m_renderBuffer.push_back(s);
+        m_renderBuffer.push_back(s);
     }
 
     // Anti-click: linearly fade the last ~8ms to silence instead of cutting

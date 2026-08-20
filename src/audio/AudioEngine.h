@@ -32,6 +32,14 @@ struct AudioConfig {
     int          volume = 50;  // 0-100
     AyChipType   chipType = AyChipType::Ay38910;      // DAC/envelope characteristics
     int          clockHz  = kAYClockRateSpectrum;     // PSG clock rate
+
+    // Extra low-pass cutoff (Hz) applied on top of the output rate's own
+    // Nyquist during the final downsample -- 0 disables it, using only the
+    // output rate's natural Nyquist as the cutoff. Real machines' analog
+    // output stages rolled off high frequencies before the signal left the
+    // box; this lets that be modelled explicitly instead of just however
+    // much filtering the configured output sample rate happens to imply.
+    int          lowpassHz = 0;
 };
 
 class AudioEngine {
