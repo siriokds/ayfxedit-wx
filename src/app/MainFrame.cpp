@@ -1,11 +1,15 @@
 #include "MainFrame.h"
 #include "PianoWindow.h"
 #include "../audio/WaveExport.h"
+#include "../core/VtxDecoder.h"
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
+#include <fstream>
 #include <string>
+#include <string_view>
 
 #include <wx/accel.h>
 #include <wx/choice.h>
@@ -25,6 +29,7 @@
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/panel.h>
+#include <wx/radiobut.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/stdpaths.h>
@@ -66,8 +71,40 @@ enum : int {
     kIdStopEffect,
     kIdAudioSettings,
     kIdExportWave,
+    kIdExportCsv,
+    kIdExportVt2,
+    kIdImportPsg,
+    kIdImportVtx,
+    kIdMultiLoadBank,
+    kIdMultiSaveBank,
+    kIdExportScopeCurrent,
+    kIdExportScopeAll,
     kIdNotImplemented
 };
+
+constexpr double kVt2NoteFreqs[12] = {
+    2093.0, 2217.4, 2349.2, 2489.0, 2637.0, 2793.8,
+    2960.0, 3136.0, 3322.4, 3520.0, 3729.2, 3951.0,
+};
+
+// Vortex Tracker II export note/octave -> AY tone-period offset table,
+// ported verbatim from the original's EffectExportVT2 (export_vt2.h). One
+// extra slot (index 96) is kept zero-initialized: the original's BaseNote
+// can reach 8*12=96, one past its own 8*12-entry table (an off-by-one in
+// the original that reads past the array there; harmless in Delphi's
+// static array layout, but would be real UB here), so this array is sized
+// 8*12+1 to give that edge case a defined (if musically meaningless) value
+// instead.
+std::array<int, 8 * 12 + 1> BuildVt2OffsetTable() {
+    std::array<int, 8 * 12 + 1> offset{};
+    for (int i = 0; i < 8; ++i) {
+        for (int j = 0; j < 12; ++j) {
+            const int n = static_cast<int>(kAYClockRateSpectrum * 8.0 / kVt2NoteFreqs[j]);
+            offset[i * 12 + j] = n >> i;
+        }
+    }
+    return offset;
+}
 
 struct EditorLayout {
     static constexpr int kXOff = 4;
@@ -384,8 +421,8 @@ void MainFrame::createMenu() {
     fileMenu->Append(kIdLoadEffect, "Load current effect...");
     fileMenu->Append(kIdSaveEffect, "Save current effect...");
     fileMenu->AppendSeparator();
-    fileMenu->Append(kIdNotImplemented, "Multi-load to bank...");
-    fileMenu->Append(kIdNotImplemented, "Multi-save from bank...");
+    fileMenu->Append(kIdMultiLoadBank, "Multi-load to bank...");
+    fileMenu->Append(kIdMultiSaveBank, "Multi-save from bank...");
     fileMenu->AppendSeparator();
     fileMenu->Append(wxID_EXIT, "E&xit");
 
@@ -417,18 +454,18 @@ void MainFrame::createMenu() {
     bankMenu->Append(kIdDeleteEffect, "Delete effect");
 
     auto* importMenu = new wxMenu();
-    importMenu->Append(kIdNotImplemented, "PSG for AY...");
-    importMenu->Append(kIdNotImplemented, "VTX file...");
+    importMenu->Append(kIdImportPsg, "PSG for AY...");
+    importMenu->Append(kIdImportVtx, "VTX file...");
     importMenu->Append(kIdNotImplemented, "VGM file...");
     importMenu->Append(kIdNotImplemented, "Wave file...");
 
     auto* exportMenu = new wxMenu();
-    exportMenu->Append(kIdNotImplemented, "VTII Sample...");
+    exportMenu->Append(kIdExportVt2, "VTII Sample...");
     exportMenu->Append(kIdExportWave, "Wave file...");
-    exportMenu->Append(kIdNotImplemented, "CSV...");
+    exportMenu->Append(kIdExportCsv, "CSV...");
     exportMenu->AppendSeparator();
-    exportCurrentItem_ = exportMenu->AppendRadioItem(kIdNotImplemented + 1, "Current effect");
-    exportAllItem_ = exportMenu->AppendRadioItem(kIdNotImplemented + 2, "All effects");
+    exportCurrentItem_ = exportMenu->AppendRadioItem(kIdExportScopeCurrent, "Current effect");
+    exportAllItem_ = exportMenu->AppendRadioItem(kIdExportScopeAll, "All effects");
     exportCurrentItem_->Check(true);
 
     auto* helpMenu = new wxMenu();
@@ -452,6 +489,12 @@ void MainFrame::createMenu() {
     Bind(wxEVT_MENU, &MainFrame::onLoadEffect, this, kIdLoadEffect);
     Bind(wxEVT_MENU, &MainFrame::onSaveEffect, this, kIdSaveEffect);
     Bind(wxEVT_MENU, &MainFrame::onExportWave, this, kIdExportWave);
+    Bind(wxEVT_MENU, &MainFrame::onExportCsv, this, kIdExportCsv);
+    Bind(wxEVT_MENU, &MainFrame::onExportVt2, this, kIdExportVt2);
+    Bind(wxEVT_MENU, &MainFrame::onImportPsg, this, kIdImportPsg);
+    Bind(wxEVT_MENU, &MainFrame::onImportVtx, this, kIdImportVtx);
+    Bind(wxEVT_MENU, &MainFrame::onMultiLoadBank, this, kIdMultiLoadBank);
+    Bind(wxEVT_MENU, &MainFrame::onMultiSaveBank, this, kIdMultiSaveBank);
 
     Bind(wxEVT_MENU, &MainFrame::onEditCut, this, kIdEditCut);
     Bind(wxEVT_MENU, &MainFrame::onEditCopy, this, kIdEditCopy);
@@ -502,8 +545,7 @@ void MainFrame::createMenu() {
                          wxOK | wxICON_INFORMATION,
                          this);
             },
-            kIdNotImplemented,
-            kIdNotImplemented + 2);
+            kIdNotImplemented);
 
     Bind(wxEVT_MENU,
          [this](wxCommandEvent&) {
@@ -777,6 +819,9 @@ void MainFrame::refreshView() {
 
     if (effectNameText_ && (!effectNameText_->HasFocus() || !effectNameText_->IsEditable())) {
         effectNameText_->SetValue(fx.name);
+        effectNameText_->SetForegroundColour(isPlaceholderEffectName(fx.name)
+            ? wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT)
+            : wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
     }
 
     if (firstButton_) {
@@ -963,6 +1008,7 @@ void MainFrame::onExportWave(wxCommandEvent& event) {
             return;
         }
         const std::filesystem::path dir = dlg.GetPath().ToStdString();
+        const auto bankName = sanitizeFileName(bankPath_.stem().string());
 
         int exported = 0;
         int failed = 0;
@@ -971,7 +1017,7 @@ void MainFrame::onExportWave(wxCommandEvent& event) {
                 continue;  // matches the original's multi-export: skip empty effects
             }
             const auto name = sanitizeFileName(bank_.effect(i).name);
-            const auto path = dir / (wxString::Format("%03zu_%s.wav", i, name).ToStdString());
+            const auto path = dir / (wxString::Format("%s_%03zu_%s.wav", bankName, i, name).ToStdString());
             if (exportEffectWave(i, path)) {
                 ++exported;
             } else {
@@ -1005,6 +1051,348 @@ void MainFrame::onExportWave(wxCommandEvent& event) {
     const std::filesystem::path selected = dlg.GetPath().ToStdString();
     if (!exportEffectWave(currentEffect_, selected)) {
         wxMessageBox("Can't export effect (it may be empty).", "Error", wxOK | wxICON_ERROR, this);
+    }
+}
+
+void MainFrame::onExportCsv(wxCommandEvent& event) {
+    (void)event;
+
+    if (exportAllItem_ && exportAllItem_->IsChecked()) {
+        wxDirDialog dlg(this, "Export all effects as CSV files — choose a folder");
+        if (dlg.ShowModal() != wxID_OK) {
+            return;
+        }
+        const std::filesystem::path dir = dlg.GetPath().ToStdString();
+        const auto bankName = sanitizeFileName(bankPath_.stem().string());
+
+        int exported = 0;
+        int failed = 0;
+        for (std::size_t i = 0; i < bank_.effectCount(); ++i) {
+            if (bank_.effectRealLength(i) == 0) {
+                continue;  // matches the original's multi-export: skip empty effects
+            }
+            const auto name = sanitizeFileName(bank_.effect(i).name);
+            const auto path = dir / (wxString::Format("%s_%03zu_%s.csv", bankName, i, name).ToStdString());
+            if (exportEffectCsv(i, path)) {
+                ++exported;
+            } else {
+                ++failed;
+            }
+        }
+
+        if (failed > 0) {
+            wxMessageBox(wxString::Format("Exported %d effect(s); %d failed.", exported, failed),
+                         "Export CSV", wxOK | wxICON_WARNING, this);
+        } else {
+            wxMessageBox(wxString::Format("Exported %d effect(s).", exported),
+                         "Export CSV", wxOK | wxICON_INFORMATION, this);
+        }
+        return;
+    }
+
+    const auto defaultName = sanitizeFileName(bank_.effect(currentEffect_).name);
+
+    wxFileDialog dlg(this,
+                     "Export current effect as CSV",
+                     wxEmptyString,
+                     defaultName + ".csv",
+                     "CSV file (*.csv)|*.csv|All files (*.*)|*.*",
+                     wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+
+    if (dlg.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    const std::filesystem::path selected = dlg.GetPath().ToStdString();
+    if (!exportEffectCsv(currentEffect_, selected)) {
+        wxMessageBox("Can't export effect (it may be empty).", "Error", wxOK | wxICON_ERROR, this);
+    }
+}
+
+void MainFrame::onExportVt2(wxCommandEvent& event) {
+    (void)event;
+
+    // Base note picker, shown once regardless of scope (matches the
+    // original's MExportVT2Click: FormVortexExp is shown up front, and the
+    // chosen BaseNote is then reused for every effect in a batch export).
+    int baseNote = 5 * 12;  // original default: FormVortexExp::FormCreate sets BaseNote=5*12
+    {
+        wxDialog dlg(this, wxID_ANY, "Export Vortex Tracker II instrument",
+                     wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE);
+        auto* vs = new wxBoxSizer(wxVERTICAL);
+
+        static const char* const kNoteNames[12] = {
+            "C-", "C#", "D-", "D#", "E-", "F-", "F#", "G-", "G#", "A-", "A#", "B-"};
+
+        auto* noteLabel = new wxStaticText(&dlg, wxID_ANY, wxEmptyString,
+                                           wxDefaultPosition, wxDefaultSize, wxALIGN_CENTER_HORIZONTAL);
+        auto updateNoteLabel = [&]() {
+            noteLabel->SetLabel(wxString::Format("Base note: %s%d", kNoteNames[baseNote % 12], baseNote / 12));
+        };
+        updateNoteLabel();
+
+        auto* btnDownOct  = new wxButton(&dlg, wxID_ANY, "Octave -");
+        auto* btnDownSemi = new wxButton(&dlg, wxID_ANY, "Semi -");
+        auto* btnUpSemi   = new wxButton(&dlg, wxID_ANY, "Semi +");
+        auto* btnUpOct    = new wxButton(&dlg, wxID_ANY, "Octave +");
+
+        auto adjust = [&](int delta) {
+            baseNote = std::clamp(baseNote + delta, 1 * 12, 8 * 12);
+            updateNoteLabel();
+        };
+        btnDownOct->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { adjust(-12); });
+        btnDownSemi->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { adjust(-1); });
+        btnUpSemi->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { adjust(1); });
+        btnUpOct->Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { adjust(12); });
+
+        auto* btnRow = new wxBoxSizer(wxHORIZONTAL);
+        btnRow->Add(btnDownOct, 0, wxALL, 3);
+        btnRow->Add(btnDownSemi, 0, wxALL, 3);
+        btnRow->Add(btnUpSemi, 0, wxALL, 3);
+        btnRow->Add(btnUpOct, 0, wxALL, 3);
+
+        vs->Add(noteLabel, 0, wxALIGN_CENTER | wxALL, 12);
+        vs->Add(btnRow, 0, wxALIGN_CENTER | wxALL, 6);
+        vs->Add(dlg.CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 12);
+        dlg.SetSizerAndFit(vs);
+        dlg.SetMinSize(dlg.FromDIP(wxSize(280, -1)));
+
+        if (dlg.ShowModal() != wxID_OK) {
+            return;
+        }
+    }
+
+    if (exportAllItem_ && exportAllItem_->IsChecked()) {
+        wxDirDialog dlg(this, "Export all effects as VTII samples — choose a folder");
+        if (dlg.ShowModal() != wxID_OK) {
+            return;
+        }
+        const std::filesystem::path dir = dlg.GetPath().ToStdString();
+        const auto bankName = sanitizeFileName(bankPath_.stem().string());
+
+        int exported = 0;
+        int failed = 0;
+        for (std::size_t i = 0; i < bank_.effectCount(); ++i) {
+            if (bank_.effectRealLength(i) == 0) {
+                continue;  // matches the original's multi-export: skip empty effects
+            }
+            const auto name = sanitizeFileName(bank_.effect(i).name);
+            const auto path = dir / (wxString::Format("%s_%03zu_%s.txt", bankName, i, name).ToStdString());
+            if (exportEffectVt2(i, path, baseNote)) {
+                ++exported;
+            } else {
+                ++failed;
+            }
+        }
+
+        if (failed > 0) {
+            wxMessageBox(wxString::Format("Exported %d effect(s); %d failed.", exported, failed),
+                         "Export VTII sample", wxOK | wxICON_WARNING, this);
+        } else {
+            wxMessageBox(wxString::Format("Exported %d effect(s).", exported),
+                         "Export VTII sample", wxOK | wxICON_INFORMATION, this);
+        }
+        return;
+    }
+
+    const auto defaultName = sanitizeFileName(bank_.effect(currentEffect_).name);
+
+    wxFileDialog dlg(this,
+                     "Export Vortex Tracker II instrument",
+                     wxEmptyString,
+                     defaultName + ".txt",
+                     "Text file (*.txt)|*.txt|All files (*.*)|*.*",
+                     wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+
+    if (dlg.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    const std::filesystem::path selected = dlg.GetPath().ToStdString();
+    if (!exportEffectVt2(currentEffect_, selected, baseNote)) {
+        wxMessageBox("Can't export effect (it may be empty).", "Error", wxOK | wxICON_ERROR, this);
+    }
+}
+
+void MainFrame::onImportPsg(wxCommandEvent& event) {
+    (void)event;
+
+    wxFileDialog fileDlg(this,
+                         "Load PSG file",
+                         wxEmptyString,
+                         "",
+                         "PSG AY register dump (*.psg)|*.psg|All files (*.*)|*.*",
+                         wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+    if (fileDlg.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::filesystem::path selected = fileDlg.GetPath().ToStdString();
+
+    // Channel select, shown after the file picker (matches the original's
+    // MImportPSGClick order).
+    int channel = -1;
+    if (!showAyChannelSelectDialog(channel)) {
+        return;
+    }
+
+    if (!importEffectPsg(currentEffect_, selected, channel)) {
+        wxMessageBox("Can't import PSG file.", "Error", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    currentOffset_ = 0;
+    currentY_ = 0;
+    currentX_ = 0;
+    clipboard_.clear();
+    refreshView();
+}
+
+void MainFrame::onImportVtx(wxCommandEvent& event) {
+    (void)event;
+
+    wxFileDialog fileDlg(this,
+                         "Load VTX file",
+                         wxEmptyString,
+                         "",
+                         "Vortex Tracker file (*.vtx)|*.vtx|All files (*.*)|*.*",
+                         wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+    if (fileDlg.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::filesystem::path selected = fileDlg.GetPath().ToStdString();
+
+    int channel = -1;
+    if (!showAyChannelSelectDialog(channel)) {
+        return;
+    }
+
+    if (!importEffectVtx(currentEffect_, selected, channel)) {
+        wxMessageBox("Can't import VTX file.", "Error", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    currentOffset_ = 0;
+    currentY_ = 0;
+    currentX_ = 0;
+    clipboard_.clear();
+    refreshView();
+}
+
+bool MainFrame::showAyChannelSelectDialog(int& channel) {
+    wxDialog dlg(this, wxID_ANY, "Select AY channel for import",
+                 wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE);
+    auto* vs = new wxBoxSizer(wxVERTICAL);
+
+    auto* radioAuto = new wxRadioButton(&dlg, wxID_ANY, "Auto", wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
+    auto* radioA = new wxRadioButton(&dlg, wxID_ANY, "Chn. A");
+    auto* radioB = new wxRadioButton(&dlg, wxID_ANY, "Chn. B");
+    auto* radioC = new wxRadioButton(&dlg, wxID_ANY, "Chn. C");
+    radioAuto->SetValue(true);
+
+    vs->Add(radioAuto, 0, wxALL, 4);
+    vs->Add(radioA, 0, wxLEFT | wxRIGHT | wxBOTTOM, 4);
+    vs->Add(radioB, 0, wxLEFT | wxRIGHT | wxBOTTOM, 4);
+    vs->Add(radioC, 0, wxLEFT | wxRIGHT | wxBOTTOM, 4);
+    vs->Add(dlg.CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 8);
+    dlg.SetSizerAndFit(vs);
+
+    if (dlg.ShowModal() != wxID_OK) {
+        return false;
+    }
+
+    if (radioA->GetValue()) {
+        channel = 0;
+    } else if (radioB->GetValue()) {
+        channel = 1;
+    } else if (radioC->GetValue()) {
+        channel = 2;
+    } else {
+        channel = -1;
+    }
+    return true;
+}
+
+void MainFrame::onMultiLoadBank(wxCommandEvent& event) {
+    (void)event;
+
+    wxFileDialog dlg(this,
+                     "Multi-load to bank",
+                     wxEmptyString,
+                     "",
+                     "AYFX effect (*.afx)|*.afx|All files (*.*)|*.*",
+                     wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
+
+    if (dlg.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    wxArrayString paths;
+    dlg.GetPaths(paths);
+    if (paths.IsEmpty()) {
+        return;
+    }
+
+    // Reuse the last slot if it's empty, otherwise start appending after it
+    // (mirrors the original's MFileMultiLoadClick).
+    std::size_t target = bank_.effectCount() - 1;
+    if (bank_.effectRealLength(target) > 0) {
+        ++target;
+    }
+    const std::size_t firstTarget = target;
+
+    int loaded = 0;
+    for (const auto& p : paths) {
+        if (target >= bank_.effectCount() && !bank_.addEffect()) {
+            break;  // bank full (256 effects)
+        }
+        if (bank_.loadEffect(target, p.ToStdString())) {
+            ++loaded;
+        }
+        ++target;
+    }
+
+    if (loaded < static_cast<int>(paths.size())) {
+        wxMessageBox(wxString::Format("Loaded %d of %zu effect(s); bank is full at 256 effects.",
+                                       loaded, paths.size()),
+                     "Multi-load", wxOK | wxICON_WARNING, this);
+    }
+
+    if (loaded > 0) {
+        setCurrentEffect(firstTarget);
+    }
+}
+
+void MainFrame::onMultiSaveBank(wxCommandEvent& event) {
+    (void)event;
+
+    wxDirDialog dlg(this, "Multi-save from bank — choose a folder");
+    if (dlg.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::filesystem::path dir = dlg.GetPath().ToStdString();
+    const auto bankName = sanitizeFileName(bankPath_.stem().string());
+
+    int saved = 0;
+    int failed = 0;
+    for (std::size_t i = 0; i < bank_.effectCount(); ++i) {
+        if (bank_.effectRealLength(i) == 0) {
+            continue;  // matches the original's multi-save: skip empty effects
+        }
+        const auto name = sanitizeFileName(bank_.effect(i).name);
+        const auto path = dir / (wxString::Format("%s_%03zu_%s.afx", bankName, i, name).ToStdString());
+        if (bank_.saveEffect(i, path)) {
+            ++saved;
+        } else {
+            ++failed;
+        }
+    }
+
+    if (failed > 0) {
+        wxMessageBox(wxString::Format("Saved %d effect(s); %d failed.", saved, failed),
+                     "Multi-save", wxOK | wxICON_WARNING, this);
+    } else {
+        wxMessageBox(wxString::Format("Saved %d effect(s).", saved),
+                     "Multi-save", wxOK | wxICON_INFORMATION, this);
     }
 }
 
@@ -1068,9 +1456,8 @@ void MainFrame::onApplyName(wxCommandEvent& event) {
 
     bank_.effect(currentEffect_).name = effectNameText_->GetValue().ToStdString();
     effectNameText_->SetEditable(false);
-    effectNameText_->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
     editorPanel_->SetFocus();
-    refreshView();
+    refreshView();  // also restores the name field's resting colour
 }
 
 void MainFrame::onEditorMouseDown(wxMouseEvent& event) {
@@ -1452,6 +1839,25 @@ std::string MainFrame::sanitizeFileName(const std::string& value) {
     }
 
     return out;
+}
+
+bool MainFrame::isPlaceholderEffectName(const std::string& name) {
+    if (name.empty()) {
+        return true;
+    }
+
+    // Matches BankModel::makeDefaultName ("nonameNNN") and ::insertEffect
+    // ("insertedNNN") — auto-generated names, not something the user (or an
+    // import) actually set.
+    auto matchesGeneratedPattern = [&](std::string_view prefix) {
+        if (name.size() <= prefix.size() || name.compare(0, prefix.size(), prefix) != 0) {
+            return false;
+        }
+        return std::all_of(name.begin() + static_cast<std::ptrdiff_t>(prefix.size()), name.end(),
+                            [](unsigned char c) { return std::isdigit(c) != 0; });
+    };
+
+    return matchesGeneratedPattern("noname") || matchesGeneratedPattern("inserted");
 }
 
 void MainFrame::setCurrentEffect(std::size_t index) {
@@ -1907,6 +2313,330 @@ bool MainFrame::exportEffectWave(std::size_t effectIndex, const std::filesystem:
     }
     const auto pcm = audioEngine_.renderToPcm(frames);
     return WriteWaveFile(path.string(), pcm, audioEngine_.config().sampleRate);
+}
+
+bool MainFrame::exportEffectCsv(std::size_t effectIndex, const std::filesystem::path& path) {
+    const auto realLen = bank_.effectRealLength(effectIndex);
+    if (realLen == 0) {
+        return false;
+    }
+
+    std::ofstream out(path);
+    if (!out) {
+        return false;
+    }
+
+    const auto& fx = bank_.effect(effectIndex);
+    for (std::size_t i = 0; i < realLen; ++i) {
+        const auto& cell = fx.frames[i];
+        out << (cell.toneEnable ? 1 : 0) << ',' << (cell.noiseEnable ? 1 : 0) << ','
+            << wxString::Format("0x%3.3x,0x%2.2x,0x%1.1x", cell.tone, cell.noise, cell.volume).ToStdString()
+            << '\n';
+    }
+    return static_cast<bool>(out);
+}
+
+bool MainFrame::exportEffectVt2(std::size_t effectIndex, const std::filesystem::path& path, int baseNote) {
+    auto realLen = bank_.effectRealLength(effectIndex);
+    if (realLen == 0) {
+        return false;
+    }
+    if (realLen > 0x3f) {
+        realLen = 0x3f;
+    }
+
+    static const auto kOffset = BuildVt2OffsetTable();
+    const int base = std::clamp(baseNote, 0, static_cast<int>(kOffset.size()) - 1);
+
+    std::ofstream out(path);
+    if (!out) {
+        return false;
+    }
+
+    out << "[Sample]\n";
+
+    const auto& fx = bank_.effect(effectIndex);
+    for (std::size_t i = 0; i < realLen; ++i) {
+        const auto& cell = fx.frames[i];
+        int t = static_cast<int>(cell.tone) - kOffset[base];
+        t = std::clamp(t, -1023, 1023);
+        const int absT = t < 0 ? -t : t;
+
+        out << (cell.toneEnable ? 'T' : 't') << (cell.noiseEnable ? 'N' : 'n') << "e "
+            << (t < 0 ? '-' : '+')
+            << wxString::Format("%03X", absT).ToStdString() << "_ +"
+            << wxString::Format("%02X", cell.noise).ToStdString() << "_ "
+            << wxString::Format("%01X", cell.volume).ToStdString() << "_\n";
+    }
+
+    out << "tne +000_ +00_ 0_ L\n";
+    return static_cast<bool>(out);
+}
+
+bool MainFrame::importEffectPsg(std::size_t effectIndex, const std::filesystem::path& path, int channel) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    const std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (data.size() < 3 || data[0] != 'P' || data[1] != 'S' || data[2] != 'G') {
+        return false;
+    }
+
+    auto& fx = bank_.effect(effectIndex);
+    auto& outFrames = fx.frames;
+    std::fill(outFrames.begin(), outFrames.end(), AyfxCell{});
+    const std::size_t maxFrames = outFrames.size();
+
+    const std::size_t size = data.size();
+    std::size_t ptr = 16;  // 16-byte header, unparsed beyond the "PSG" signature
+    std::size_t pd = 0;
+
+    int tone = 0, noise = 0, volume = 0, nvolume = 0;
+    int ltone[3] = {0, 0, 0};
+    int lnoise = 0;
+    bool lt[3] = {false, false, false};
+    bool ln[3] = {false, false, false};
+    bool t = false, n = false;
+    bool first = true;
+    int chan = channel;
+    int newchan = channel;
+    int icnt = 0;
+
+    auto setToneLo = [&](int ch) {
+        ltone[ch] = (ltone[ch] & 0x0F00) | data[ptr + 1];
+        if (chan < 0 && ltone[ch] > 0) {
+            noise = lnoise; tone = ltone[ch]; t = lt[ch]; n = ln[ch];
+        }
+        if (chan == ch) tone = ltone[ch];
+    };
+    auto setToneHi = [&](int ch) {
+        ltone[ch] = (ltone[ch] & 0x00FF) | (static_cast<int>(data[ptr + 1]) << 8);
+        if (chan < 0 && ltone[ch] > 0) {
+            noise = lnoise; tone = ltone[ch]; t = lt[ch]; n = ln[ch];
+        }
+        if (chan == ch) tone = ltone[ch];
+    };
+    auto setVolume = [&](int ch) {
+        nvolume = data[ptr + 1] & 0x0F;
+        if (chan < 0 && nvolume > 0) { newchan = ch; volume = nvolume; }
+        if (chan == ch) volume = nvolume;
+    };
+
+    while (ptr < size) {
+        const std::uint8_t reg = data[ptr];
+        switch (reg) {
+        case 0:  if (ptr + 1 >= size) { ptr = size; break; } setToneLo(0); ptr += 2; break;
+        case 1:  if (ptr + 1 >= size) { ptr = size; break; } setToneHi(0); ptr += 2; break;
+        case 2:  if (ptr + 1 >= size) { ptr = size; break; } setToneLo(1); ptr += 2; break;
+        case 3:  if (ptr + 1 >= size) { ptr = size; break; } setToneHi(1); ptr += 2; break;
+        case 4:  if (ptr + 1 >= size) { ptr = size; break; } setToneLo(2); ptr += 2; break;
+        case 5:  if (ptr + 1 >= size) { ptr = size; break; } setToneHi(2); ptr += 2; break;
+        case 6:
+            if (ptr + 1 >= size) { ptr = size; break; }
+            lnoise = data[ptr + 1] & 0x1F;
+            if (chan >= 0) noise = lnoise;
+            ptr += 2;
+            break;
+        case 7:
+            if (ptr + 1 >= size) { ptr = size; break; }
+            {
+                const std::uint8_t mixer = data[ptr + 1];
+                lt[0] = !(mixer & 0x01); ln[0] = !(mixer & 0x08);
+                lt[1] = !(mixer & 0x02); ln[1] = !(mixer & 0x10);
+                lt[2] = !(mixer & 0x04); ln[2] = !(mixer & 0x20);
+                if (chan >= 0) { t = lt[chan]; n = ln[chan]; }
+            }
+            ptr += 2;
+            break;
+        case 8:  if (ptr + 1 >= size) { ptr = size; break; } setVolume(0); ptr += 2; break;
+        case 9:  if (ptr + 1 >= size) { ptr = size; break; } setVolume(1); ptr += 2; break;
+        case 10: if (ptr + 1 >= size) { ptr = size; break; } setVolume(2); ptr += 2; break;
+        case 255:
+            if (pd == maxFrames) ptr = size;
+            icnt = 1;
+            ptr += 1;
+            break;
+        case 254:
+            if (ptr + 1 >= size) { ptr = size; break; }
+            icnt = data[ptr + 1] * 4;
+            ptr += 2;
+            break;
+        case 253:
+            ptr = size;
+            break;
+        default:
+            ptr += 2;
+            break;
+        }
+
+        if (newchan >= 0) {
+            chan = newchan;
+            noise = lnoise;
+            tone = ltone[chan];
+            t = lt[chan];
+            n = ln[chan];
+        }
+
+        for (int aa = 0; aa < icnt; ++aa) {
+            if (pd == maxFrames) {
+                ptr = size;
+                break;
+            }
+            if (first) {
+                if (tone == 0 && noise == 0 && volume == 0) {
+                    continue;
+                }
+            }
+            first = false;
+            AyfxCell cell;
+            cell.tone = static_cast<std::uint16_t>(tone);
+            cell.noise = static_cast<std::uint8_t>(noise);
+            cell.volume = static_cast<std::uint8_t>(volume);
+            cell.toneEnable = t;
+            cell.noiseEnable = n;
+            outFrames[pd++] = cell;
+        }
+        icnt = 0;
+    }
+
+    fx.name = path.stem().string();
+    return true;
+}
+
+bool MainFrame::importEffectVtx(std::size_t effectIndex, const std::filesystem::path& path, int channel) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    const std::vector<std::uint8_t> raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (raw.size() < 16) {
+        return false;
+    }
+    const bool isAy = raw[0] == 'a' && raw[1] == 'y';
+    const bool isYm = raw[0] == 'y' && raw[1] == 'm';
+    if (!isAy && !isYm) {
+        return false;
+    }
+
+    const std::size_t usize = static_cast<std::size_t>(raw[12]) |
+                               (static_cast<std::size_t>(raw[13]) << 8) |
+                               (static_cast<std::size_t>(raw[14]) << 16) |
+                               (static_cast<std::size_t>(raw[15]) << 24);
+    if (usize == 0 || usize > 64u * 1024u * 1024u) {
+        return false;  // 0 or implausibly large -> treat as corrupt/malformed
+    }
+
+    // Header holds 5 NUL-terminated strings (title/author/etc, unused here)
+    // before the LH5-compressed register table.
+    std::size_t ptr = 16;
+    for (int i = 0; i < 5; ++i) {
+        while (ptr < raw.size() && raw[ptr] != 0) {
+            ++ptr;
+        }
+        ++ptr;
+    }
+    if (ptr >= raw.size()) {
+        return false;
+    }
+
+    const auto decompressed = DecodeLh5(raw.data() + ptr, raw.size() - ptr, usize);
+    if (decompressed.size() != usize) {
+        return false;
+    }
+
+    // Register-major layout: 14 planes of `block` bytes each (registers
+    // 0-13), one byte per AY-frame per register. Only registers 0-10 are
+    // used (11-13 are envelope, which ayfx effects don't model).
+    const int regord[11] = {5, 6, 7, 8, 9, 10, 0, 1, 2, 3, 4};
+    const std::size_t block = usize / 14;
+    if (block == 0) {
+        return false;
+    }
+
+    auto& fx = bank_.effect(effectIndex);
+    auto& outFrames = fx.frames;
+    std::fill(outFrames.begin(), outFrames.end(), AyfxCell{});
+    const std::size_t maxFrames = outFrames.size();
+
+    int tone = 0, noise = 0, volume = 0;
+    int ltone[3] = {0, 0, 0};
+    int lnoise = 0;
+    bool lt[3] = {false, false, false};
+    bool ln[3] = {false, false, false};
+    bool t = false, n = false;
+    int chan = channel;
+    int newchan = channel;
+    std::size_t pd = 0;
+
+    for (std::size_t pp = 0; pp < block; ++pp) {
+        for (int aa = 0; aa < 11; ++aa) {
+            const int reg = regord[aa];
+            const std::uint8_t v = decompressed[pp + static_cast<std::size_t>(reg) * block];
+            switch (reg) {
+            case 0: ltone[0] = (ltone[0] & 0x0F00) | v; if (chan == 0) tone = ltone[0]; break;
+            case 1: ltone[0] = (ltone[0] & 0x00FF) | (static_cast<int>(v) << 8); if (chan == 0) tone = ltone[0]; break;
+            case 2: ltone[1] = (ltone[1] & 0x0F00) | v; if (chan == 1) tone = ltone[1]; break;
+            case 3: ltone[1] = (ltone[1] & 0x00FF) | (static_cast<int>(v) << 8); if (chan == 1) tone = ltone[1]; break;
+            case 4: ltone[2] = (ltone[2] & 0x0F00) | v; if (chan == 2) tone = ltone[2]; break;
+            case 5: ltone[2] = (ltone[2] & 0x00FF) | (static_cast<int>(v) << 8); if (chan == 2) tone = ltone[2]; break;
+            case 6:
+                lnoise = v & 0x1F;
+                if (chan >= 0) noise = lnoise;
+                break;
+            case 7:
+                lt[0] = !(v & 0x01); ln[0] = !(v & 0x08);
+                lt[1] = !(v & 0x02); ln[1] = !(v & 0x10);
+                lt[2] = !(v & 0x04); ln[2] = !(v & 0x20);
+                if (chan >= 0) { t = lt[chan]; n = ln[chan]; }
+                break;
+            case 8: {
+                const int nvolume = v & 0x0F;
+                if (chan < 0 && nvolume > 0) { newchan = 0; volume = nvolume; }
+                if (chan == 0) volume = nvolume;
+                break;
+            }
+            case 9: {
+                const int nvolume = v & 0x0F;
+                if (chan < 0 && nvolume > 0) { newchan = 1; volume = nvolume; }
+                if (chan == 1) volume = nvolume;
+                break;
+            }
+            case 10: {
+                const int nvolume = v & 0x0F;
+                if (chan < 0 && nvolume > 0) { newchan = 2; volume = nvolume; }
+                if (chan == 2) volume = nvolume;
+                break;
+            }
+            default:
+                break;
+            }
+
+            if (newchan >= 0) {
+                chan = newchan;
+                noise = lnoise;
+                tone = ltone[chan];
+                t = lt[chan];
+                n = ln[chan];
+            }
+        }
+
+        if (pd >= maxFrames) {
+            break;
+        }
+        if (chan >= 0) {
+            AyfxCell cell;
+            cell.tone = static_cast<std::uint16_t>(tone);
+            cell.noise = static_cast<std::uint8_t>(noise);
+            cell.volume = static_cast<std::uint8_t>(volume);
+            cell.toneEnable = t;
+            cell.noiseEnable = n;
+            outFrames[pd++] = cell;
+        }
+    }
+
+    fx.name = path.stem().string();
+    return true;
 }
 
 void MainFrame::togglePianoInput() {

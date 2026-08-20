@@ -10,6 +10,7 @@ set(AYFX_THIRD_PARTY_DIR "${AYFX_REPO_ROOT}/third_party")
 set(DR_LIBS_DIR "${AYFX_THIRD_PARTY_DIR}/dr_libs")
 set(MINIAUDIO_DIR "${AYFX_THIRD_PARTY_DIR}/miniaudio")
 set(BLIP_AY_APU_DIR "${AYFX_THIRD_PARTY_DIR}/blip_ay_apu")
+set(LH5_DIR "${AYFX_THIRD_PARTY_DIR}/lh5")
 
 option(AYFX_USE_LOCAL_WX "Use wxWidgets from support/wxWidgets-3.3.3" ON)
 
@@ -44,6 +45,8 @@ add_executable(ayfxedit_wx WIN32
     app/PianoWindow.h
     core/BankModel.h
     core/BankModel.cpp
+    core/VtxDecoder.h
+    core/VtxDecoder.cpp
     audio/AudioEngine.h
     audio/AudioEngine.cpp
     audio/WaveExport.h
@@ -52,6 +55,12 @@ add_executable(ayfxedit_wx WIN32
     ${BLIP_AY_APU_DIR}/Ay_Apu.cpp
     ${BLIP_AY_APU_DIR}/Blip_Buffer.h
     ${BLIP_AY_APU_DIR}/Blip_Buffer.cpp
+    ${LH5_DIR}/ar.h
+    ${LH5_DIR}/io.cpp
+    ${LH5_DIR}/huf.cpp
+    ${LH5_DIR}/maketbl.cpp
+    ${LH5_DIR}/maketree.cpp
+    ${LH5_DIR}/decode.cpp
 )
 
 if(WIN32)
@@ -60,7 +69,7 @@ if(WIN32)
     )
 endif()
 
-target_include_directories(ayfxedit_wx PRIVATE ${MINIAUDIO_DIR} ${BLIP_AY_APU_DIR} ${DR_LIBS_DIR})
+target_include_directories(ayfxedit_wx PRIVATE ${MINIAUDIO_DIR} ${BLIP_AY_APU_DIR} ${DR_LIBS_DIR} ${LH5_DIR})
 
 target_link_libraries(ayfxedit_wx PRIVATE
     ${AYFX_WX_LIBS}

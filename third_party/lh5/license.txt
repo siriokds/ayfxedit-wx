@@ -1,0 +1,15 @@
+ar002 -- written by Haruhiko Okumura and released to the public domain.
+
+Source: support/ayfxedit-improved/src/lh5/ in the ayfxedit-improved
+reference clone (https://github.com/Threetwosevensixseven/ayfxedit-improved),
+which itself vendors ar002's LZSS+Huffman ("-lh5-") compressor/decompressor
+for its VTX importer. Only the decode side is used by ayfxedit-wx (VTX
+import). encode.c was dropped entirely (nothing here calls encode(), and
+it isn't valid C++ as-is — it uses `new` as a variable name, among other
+C-only constructs). maketree.cpp is still included even though nothing
+calls make_tree() directly either: huf.cpp's (unused) encode-side
+functions reference it, and dropping maketree.cpp would leave an
+unresolved symbol at link time.
+
+See io.cpp and ar.h for the two small, documented modifications made for
+this port (both noted inline as "MODIFIED from upstream").

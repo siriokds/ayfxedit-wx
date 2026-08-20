@@ -28,6 +28,12 @@ private:
     void onLoadEffect(wxCommandEvent& event);
     void onSaveEffect(wxCommandEvent& event);
     void onExportWave(wxCommandEvent& event);
+    void onExportCsv(wxCommandEvent& event);
+    void onExportVt2(wxCommandEvent& event);
+    void onImportPsg(wxCommandEvent& event);
+    void onImportVtx(wxCommandEvent& event);
+    void onMultiLoadBank(wxCommandEvent& event);
+    void onMultiSaveBank(wxCommandEvent& event);
     void onPrevEffect(wxCommandEvent& event);
     void onNextEffect(wxCommandEvent& event);
     void onAddEffect(wxCommandEvent& event);
@@ -50,6 +56,7 @@ private:
     void onEditInverseSelection(wxCommandEvent& event);
 
     static std::string sanitizeFileName(const std::string& value);
+    static bool isPlaceholderEffectName(const std::string& name);
     void setCurrentEffect(std::size_t index);
     int lineOnScreen() const;
     void clampView();
@@ -68,6 +75,11 @@ private:
     std::vector<AudioEngine::FrameData> buildFrameData(std::size_t effectIndex) const;
     void playEffectFrom(std::size_t startFrame);
     bool exportEffectWave(std::size_t effectIndex, const std::filesystem::path& path);
+    bool exportEffectCsv(std::size_t effectIndex, const std::filesystem::path& path);
+    bool exportEffectVt2(std::size_t effectIndex, const std::filesystem::path& path, int baseNote);
+    bool importEffectPsg(std::size_t effectIndex, const std::filesystem::path& path, int channel);
+    bool importEffectVtx(std::size_t effectIndex, const std::filesystem::path& path, int channel);
+    bool showAyChannelSelectDialog(int& channel);
     void togglePianoInput();
     void setPianoWindowVisible(bool visible);
 
