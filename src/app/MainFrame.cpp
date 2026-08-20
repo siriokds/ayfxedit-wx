@@ -174,26 +174,12 @@ wxFont MakeEditorFont(int pointSize, bool bold = false) {
     return wxFontInfo(pointSize).Family(wxFONTFAMILY_TELETYPE).Bold(bold);
 }
 
-wxFont MakeUiFont(int pointSize) {
-    // Segoe UI is the intended look on Windows (the platform default, "MS
-    // Shell Dlg 2", looks dated) at a hand-picked point size; it doesn't
-    // exist elsewhere.
-    if (wxFontEnumerator::IsValidFacename("Segoe UI")) {
-        return wxFontInfo(pointSize).Family(wxFONTFAMILY_SWISS).FaceName("Segoe UI");
-    }
-    // Elsewhere, trust the platform's own default UI font at its own natural
-    // size rather than forcing the Windows-tuned point size onto it: macOS's
-    // default GUI font is 11pt here, and forcing it down to 9/10 made the
-    // toolbar read smaller than Finder's own default text.
-    return wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
-}
-
 int EditorPointSize() {
-    return 13;
+    return 14;
 }
 
 int EditorHeaderPointSize() {
-    return 11;
+    return 12;
 }
 
 int EditorLineHeight(const wxWindow* w) {
@@ -242,9 +228,7 @@ wxRect MakeEditorTextRect(const wxWindow* w, int x, int y, const wxString& text,
 struct EditorPalette {
     wxColour background;  // editor panel background
     wxColour text;        // normal cell text
-    wxColour barFill;     // bar fill colour
     wxColour barBorder;   // bar rectangle border
-    wxColour selection;   // selected row background
     wxColour cursorBg;    // active cell highlight background
     wxColour cursorText;  // active cell highlight text
     wxColour iconFg;      // toolbar icon foreground (stop square, piano keys)
@@ -256,9 +240,7 @@ struct EditorPalette {
         static const EditorPalette p = {
             wxColour(255, 255, 255),  // background
             wxColour(  0,   0,   0),  // text
-            wxColour(128, 128, 128),  // barFill
             wxColour(  0,   0,   0),  // barBorder
-            wxColour(192, 255, 192),  // selection
             wxColour(  0,   0,   0),  // cursorBg
             wxColour(255, 255, 255),  // cursorText
             wxColour(  0,   0,   0),  // iconFg
@@ -273,9 +255,7 @@ struct EditorPalette {
         static const EditorPalette p = {
             wxColour( 32,  32,  32),  // background
             wxColour(225, 225, 225),  // text
-            wxColour(150, 150, 150),  // barFill
             wxColour( 85,  85,  85),  // barBorder
-            wxColour( 40,  90,  40),  // selection
             wxColour(255, 255, 255),  // cursorBg
             wxColour(  0,   0,   0),  // cursorText
             wxColour(225, 225, 225),  // iconFg
@@ -606,7 +586,6 @@ void MainFrame::createMenu() {
 
 void MainFrame::createContent() {
     auto* panel = new wxPanel(this);
-    panel->SetFont(MakeUiFont(9));
     const int pad = panel->FromDIP(1);
     const int padOuter = panel->FromDIP(4);
     const int toolSide = panel->FromDIP(22);
@@ -670,9 +649,6 @@ void MainFrame::createContent() {
                                      panel->FromDIP(wxSize(240, btnH)),
                                      wxTE_PROCESS_ENTER);
 
-    const wxFont dataFont = MakeUiFont(10);
-    effectNumberText_->SetFont(dataFont);
-    effectNameText_->SetFont(dataFont);
     effectNameText_->SetEditable(false);
     effectNameText_->SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT));
 
@@ -1918,9 +1894,7 @@ void MainFrame::drawEditor(wxDC& dc) {
 
     const EditorPalette& pal = EditorPalette::current();
     const wxColour& colBackground = pal.background;
-    const wxColour& colBarFill    = pal.barFill;
     const wxColour& colTextActive = pal.text;
-    const wxColour& colSelected   = pal.selection;
 
     dc.SetBackground(wxBrush(colBackground));
     dc.Clear();
@@ -1986,8 +1960,8 @@ void MainFrame::drawEditor(wxDC& dc) {
         const auto& cell = fx.frames[pp];
         const bool active = pp < realLen;
 
-        const wxColour& back = cell.selected ? colSelected : colBackground;
-        const wxColour& textCol = colTextActive;
+        const wxColour back = cell.selected ? wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT) : colBackground;
+        const wxColour textCol = cell.selected ? wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT) : colTextActive;
 
         // Row background
         dc.SetBrush(wxBrush(back));
@@ -2024,7 +1998,13 @@ void MainFrame::drawEditor(wxDC& dc) {
         const int bh = lineH - barPad * 2;
         const double barRadius = Dip(editorPanel_, 3);
         const double fillRadius = std::max(0.0, barRadius - 1);
-        const wxColour colBarAccent = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT);
+        // On a selected row the background is already the accent colour, so
+        // the fill switches to the "on-highlight" colour instead (matching
+        // how selected list/icon content inverts against its own selection
+        // background elsewhere) — otherwise it's the same blue on blue and
+        // disappears.
+        const wxColour colBarAccent = wxSystemSettings::GetColour(
+            cell.selected ? wxSYS_COLOUR_HIGHLIGHTTEXT : wxSYS_COLOUR_HIGHLIGHT);
 
         dc.SetBrush(wxBrush(back));
         dc.SetPen(wxPen(pal.barBorder));
