@@ -42,26 +42,35 @@ On Windows the CMakeLists already checks `.local/wx/lib/cmake/wxWidgets-3.3` rel
 **Windows:** download the SDL3 development package and unzip to `C:/SDL3`  
 (or set `-DSDL3_ROOT=<path>` at configure time).
 
-**Linux:** `sudo apt install libsdl3-dev` (or equivalent)
+**Linux:** SDL3 is not yet in most distro repos. Build from source:
+
+```sh
+git clone https://github.com/libsdl-org/SDL.git -b release-3.x
+cmake -B SDL/build -S SDL -DCMAKE_BUILD_TYPE=Release
+cmake --build SDL/build
+sudo cmake --install SDL/build
+```
 
 **macOS:** `brew install sdl3`
 
 ### 4. Configure and build
 
+**Linux / macOS:**
+
 ```sh
-cmake -B build -S src
-cmake --build build --config Release
+cmake -B build -S src -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+# binary: build/ayfxedit_wx
 ```
 
-On Windows with Visual Studio:
+**Windows (Visual Studio 2022):**
 
 ```sh
 cmake -B build-vs2022 -S src -G "Visual Studio 17 2022" -A x64
 cmake --build build-vs2022 --config Release
+# binary: build-vs2022/Release/ayfxedit_wx.exe
+# SDL3.dll is copied automatically next to the executable
 ```
-
-The binary is placed in `build/Release/ayfxedit_wx` (or `build-vs2022/Release/` on Windows).  
-On Windows, `SDL3.dll` is copied automatically next to the executable.
 
 ## File format
 
