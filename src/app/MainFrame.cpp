@@ -78,9 +78,15 @@ struct EditorLayout {
     static constexpr int kVolOff = 555;
     static constexpr int kVolWdt = 64;
 
-    static constexpr int kTFlagOff = 36;
+    // T/N boxes widened and shifted left so the whitespace on either side of
+    // them (Pos-to-T, N-to-Per) reads as roughly even, measured against the
+    // header font's actual glyph metrics rather than assumed ones — with the
+    // narrower fallback font this previously silently substituted on macOS
+    // (see MakeEditorFont), "Pos" rendered narrow enough that this wasn't
+    // noticeable; real Menlo/Consolas needs the wider box to still balance.
+    static constexpr int kTFlagOff = 20;
     static constexpr int kTFlagWdt = 9;
-    static constexpr int kNFlagOff = 54;
+    static constexpr int kNFlagOff = 46;
     static constexpr int kNFlagWdt = 9;
     static constexpr int kPosWdt = 27;
 
@@ -267,7 +273,7 @@ struct EditorPalette {
             wxColour( 32,  32,  32),  // background
             wxColour(225, 225, 225),  // text
             wxColour(150, 150, 150),  // barFill
-            wxColour(210, 210, 210),  // barBorder
+            wxColour( 85,  85,  85),  // barBorder
             wxColour( 40,  90,  40),  // selection
             wxColour(255, 255, 255),  // cursorBg
             wxColour(  0,   0,   0),  // cursorText
@@ -688,6 +694,11 @@ void MainFrame::createContent() {
     topBar->Add(nextButton_, 0, wxALL, pad);
     topBar->Add(lastButton_, 0, wxALL, pad);
     topBar->Add(effectNameText_, 1, wxALL | wxALIGN_CENTER_VERTICAL | wxEXPAND, pad);
+    // Lines up the name field's right edge with the volume bar's right edge
+    // below: the editor grid sits padOuter (4 DIP) in from the panel, and
+    // ComputeBarLayout() insets the bars a further 8 DIP inside that — 12 DIP
+    // total, vs. topBar's own 3 DIP (2 from rootSizer's border + 1 item pad).
+    topBar->AddSpacer(panel->FromDIP(9));
 
     editorPanel_ = new wxPanel(panel);
     editorPanel_->SetBackgroundStyle(wxBG_STYLE_PAINT);
@@ -1861,6 +1872,14 @@ void MainFrame::drawEditor(wxDC& dc) {
     const int vColOff = Dip(editorPanel_, EditorLayout::kVColOff);
     const int tFlagOff = Dip(editorPanel_, EditorLayout::kTFlagOff);
     const int nFlagOff = Dip(editorPanel_, EditorLayout::kNFlagOff);
+    // T/N glyphs are drawn off-center within their (deliberately wide, full-
+    // column) hit-test boxes, pulled in toward the shared T/N boundary. That
+    // boundary is the midpoint of the Pos-to-Per span, so centering each
+    // glyph in its own half of the box would put the T-N gap at double the
+    // Pos-T/N-Per gaps (two glyph paddings meeting vs. one) — this evens all
+    // three out to ~13 DIP instead, without shrinking the click targets.
+    const int tFlagTextOff = nFlagOff - Dip(editorPanel_, 13);
+    const int nFlagTextOff = nFlagOff + Dip(editorPanel_, 6);
 
     wxFont bodyFont = MakeEditorFont(EditorPointSize());
     wxFont headerFont = MakeEditorFont(EditorHeaderPointSize());
@@ -1869,8 +1888,8 @@ void MainFrame::drawEditor(wxDC& dc) {
     dc.SetFont(headerFont);
     dc.SetTextForeground(colTextActive);
     dc.DrawText("Pos", xOff, yOff);
-    dc.DrawLabel("T", wxRect(xOff + tFlagOff, yOff, Dip(editorPanel_, EditorLayout::kNFlagOff - EditorLayout::kTFlagOff), head), wxALIGN_CENTER_HORIZONTAL);
-    dc.DrawLabel("N", wxRect(xOff + nFlagOff, yOff, Dip(editorPanel_, EditorLayout::kTColOff  - EditorLayout::kNFlagOff), head), wxALIGN_CENTER_HORIZONTAL);
+    dc.DrawText("T", xOff + tFlagTextOff, yOff);
+    dc.DrawText("N", xOff + nFlagTextOff, yOff);
     dc.DrawText("Per", xOff + tColOff, yOff);
     dc.DrawText("Ns", xOff + nColOff, yOff);
     dc.DrawText("V", xOff + vColOff, yOff);
@@ -1905,8 +1924,8 @@ void MainFrame::drawEditor(wxDC& dc) {
 
         dc.SetTextForeground(textCol);
         dc.DrawText(wxString::Format("%03X", static_cast<unsigned>(pp)), xOff, y);
-        dc.DrawLabel(cell.toneEnable ? "T" : "-", wxRect(xOff + tFlagOff, y, Dip(editorPanel_, EditorLayout::kNFlagOff - EditorLayout::kTFlagOff), lineH), wxALIGN_CENTER_HORIZONTAL);
-        dc.DrawLabel(cell.noiseEnable ? "N" : "-", wxRect(xOff + nFlagOff, y, Dip(editorPanel_, EditorLayout::kTColOff  - EditorLayout::kNFlagOff), lineH), wxALIGN_CENTER_HORIZONTAL);
+        dc.DrawText(cell.toneEnable ? "T" : "-", xOff + tFlagTextOff, y);
+        dc.DrawText(cell.noiseEnable ? "N" : "-", xOff + nFlagTextOff, y);
 
         auto drawCellText = [&](int col, int x, const wxString& text) {
             if (pp == currentY_ && currentX_ == col) {
