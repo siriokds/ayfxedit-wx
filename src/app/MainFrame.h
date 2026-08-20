@@ -32,6 +32,7 @@ private:
     void onExportVt2(wxCommandEvent& event);
     void onImportPsg(wxCommandEvent& event);
     void onImportVtx(wxCommandEvent& event);
+    void onImportVgm(wxCommandEvent& event);
     void onMultiLoadBank(wxCommandEvent& event);
     void onMultiSaveBank(wxCommandEvent& event);
     void onPrevEffect(wxCommandEvent& event);
@@ -79,7 +80,9 @@ private:
     bool exportEffectVt2(std::size_t effectIndex, const std::filesystem::path& path, int baseNote);
     bool importEffectPsg(std::size_t effectIndex, const std::filesystem::path& path, int channel);
     bool importEffectVtx(std::size_t effectIndex, const std::filesystem::path& path, int channel);
+    bool importEffectVgm(std::size_t effectIndex, const std::filesystem::path& path, int channel, bool mixNoise);
     bool showAyChannelSelectDialog(int& channel);
+    bool showSnChannelSelectDialog(int& channel, bool& mixNoise);
     void togglePianoInput();
     void setPianoWindowVisible(bool visible);
 

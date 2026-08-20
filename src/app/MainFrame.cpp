@@ -7,6 +7,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -19,6 +20,7 @@
 #include <wx/bmpbndl.h>
 #include <wx/bmpbuttn.h>
 #include <wx/button.h>
+#include <wx/checkbox.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcmemory.h>
 #include <wx/dirdlg.h>
@@ -75,6 +77,7 @@ enum : int {
     kIdExportVt2,
     kIdImportPsg,
     kIdImportVtx,
+    kIdImportVgm,
     kIdMultiLoadBank,
     kIdMultiSaveBank,
     kIdExportScopeCurrent,
@@ -456,7 +459,7 @@ void MainFrame::createMenu() {
     auto* importMenu = new wxMenu();
     importMenu->Append(kIdImportPsg, "PSG for AY...");
     importMenu->Append(kIdImportVtx, "VTX file...");
-    importMenu->Append(kIdNotImplemented, "VGM file...");
+    importMenu->Append(kIdImportVgm, "VGM file...");
     importMenu->Append(kIdNotImplemented, "Wave file...");
 
     auto* exportMenu = new wxMenu();
@@ -493,6 +496,7 @@ void MainFrame::createMenu() {
     Bind(wxEVT_MENU, &MainFrame::onExportVt2, this, kIdExportVt2);
     Bind(wxEVT_MENU, &MainFrame::onImportPsg, this, kIdImportPsg);
     Bind(wxEVT_MENU, &MainFrame::onImportVtx, this, kIdImportVtx);
+    Bind(wxEVT_MENU, &MainFrame::onImportVgm, this, kIdImportVgm);
     Bind(wxEVT_MENU, &MainFrame::onMultiLoadBank, this, kIdMultiLoadBank);
     Bind(wxEVT_MENU, &MainFrame::onMultiSaveBank, this, kIdMultiSaveBank);
 
@@ -1278,6 +1282,38 @@ void MainFrame::onImportVtx(wxCommandEvent& event) {
     refreshView();
 }
 
+void MainFrame::onImportVgm(wxCommandEvent& event) {
+    (void)event;
+
+    wxFileDialog fileDlg(this,
+                         "Load VGM file",
+                         wxEmptyString,
+                         "",
+                         "Sega hardware sound log (*.vgm)|*.vgm|All files (*.*)|*.*",
+                         wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+    if (fileDlg.ShowModal() != wxID_OK) {
+        return;
+    }
+    const std::filesystem::path selected = fileDlg.GetPath().ToStdString();
+
+    int channel = -1;
+    bool mixNoise = true;
+    if (!showSnChannelSelectDialog(channel, mixNoise)) {
+        return;
+    }
+
+    if (!importEffectVgm(currentEffect_, selected, channel, mixNoise)) {
+        wxMessageBox("Can't import VGM file.", "Error", wxOK | wxICON_ERROR, this);
+        return;
+    }
+
+    currentOffset_ = 0;
+    currentY_ = 0;
+    currentX_ = 0;
+    clipboard_.clear();
+    refreshView();
+}
+
 bool MainFrame::showAyChannelSelectDialog(int& channel) {
     wxDialog dlg(this, wxID_ANY, "Select AY channel for import",
                  wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE);
@@ -1309,6 +1345,57 @@ bool MainFrame::showAyChannelSelectDialog(int& channel) {
     } else {
         channel = -1;
     }
+    return true;
+}
+
+bool MainFrame::showSnChannelSelectDialog(int& channel, bool& mixNoise) {
+    wxDialog dlg(this, wxID_ANY, "Select SN channel for import",
+                 wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE);
+    auto* vs = new wxBoxSizer(wxVERTICAL);
+
+    auto* radioAuto  = new wxRadioButton(&dlg, wxID_ANY, "Auto", wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
+    auto* radioTone0 = new wxRadioButton(&dlg, wxID_ANY, "Tone #0");
+    auto* radioTone1 = new wxRadioButton(&dlg, wxID_ANY, "Tone #1");
+    auto* radioTone2 = new wxRadioButton(&dlg, wxID_ANY, "Tone #2");
+    auto* radioNoise = new wxRadioButton(&dlg, wxID_ANY, "Noise");
+    radioAuto->SetValue(true);
+
+    auto* checkMix = new wxCheckBox(&dlg, wxID_ANY, "Mix noise");
+    checkMix->SetValue(false);  // matches the original's FormSnChn default (unchecked)
+
+    // Mixing noise into the noise channel's own export doesn't make sense
+    // (matches the original disabling this checkbox for that combination).
+    auto updateMixEnabled = [=]() { checkMix->Enable(!radioNoise->GetValue()); };
+    for (auto* r : {radioAuto, radioTone0, radioTone1, radioTone2, radioNoise}) {
+        r->Bind(wxEVT_RADIOBUTTON, [updateMixEnabled](wxCommandEvent&) { updateMixEnabled(); });
+    }
+    updateMixEnabled();
+
+    vs->Add(radioAuto, 0, wxALL, 4);
+    vs->Add(radioTone0, 0, wxLEFT | wxRIGHT | wxBOTTOM, 4);
+    vs->Add(radioTone1, 0, wxLEFT | wxRIGHT | wxBOTTOM, 4);
+    vs->Add(radioTone2, 0, wxLEFT | wxRIGHT | wxBOTTOM, 4);
+    vs->Add(radioNoise, 0, wxLEFT | wxRIGHT | wxBOTTOM, 4);
+    vs->Add(checkMix, 0, wxALL, 4);
+    vs->Add(dlg.CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0, wxEXPAND | wxALL, 8);
+    dlg.SetSizerAndFit(vs);
+
+    if (dlg.ShowModal() != wxID_OK) {
+        return false;
+    }
+
+    if (radioTone0->GetValue()) {
+        channel = 0;
+    } else if (radioTone1->GetValue()) {
+        channel = 1;
+    } else if (radioTone2->GetValue()) {
+        channel = 2;
+    } else if (radioNoise->GetValue()) {
+        channel = 3;
+    } else {
+        channel = -1;
+    }
+    mixNoise = checkMix->GetValue() && channel != 3;
     return true;
 }
 
@@ -2632,6 +2719,168 @@ bool MainFrame::importEffectVtx(std::size_t effectIndex, const std::filesystem::
             cell.toneEnable = t;
             cell.noiseEnable = n;
             outFrames[pd++] = cell;
+        }
+    }
+
+    fx.name = path.stem().string();
+    return true;
+}
+
+bool MainFrame::importEffectVgm(std::size_t effectIndex, const std::filesystem::path& path, int channel, bool mixNoise) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    const std::vector<std::uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (data.size() < 0x44 || std::memcmp(data.data(), "Vgm ", 4) != 0) {
+        return false;
+    }
+
+    auto readInt32 = [&](std::size_t off) -> std::int32_t {
+        return static_cast<std::int32_t>(
+            static_cast<std::uint32_t>(data[off]) |
+            (static_cast<std::uint32_t>(data[off + 1]) << 8) |
+            (static_cast<std::uint32_t>(data[off + 2]) << 16) |
+            (static_cast<std::uint32_t>(data[off + 3]) << 24));
+    };
+
+    const std::int32_t baseFreq = readInt32(0x0c);
+    if (baseFreq == 0) {
+        return false;  // no SN76489 (PSG) clock -> nothing to import
+    }
+
+    // SN76489 emulation state, ported from the original's psg_out_port().
+    std::uint8_t chanVol[4] = {0, 0, 0, 0};
+    std::int16_t chanDiv[4] = {0, 0, 0, 0};
+    int latchedChan = 0;
+    int latchedType = 0;  // 0 = tone/noise-control, nonzero = volume
+
+    auto psgOutPort = [&](std::uint8_t val) {
+        int chan;
+        int div;
+        if (val & 0x80) {
+            chan = (val >> 5) & 3;
+            div = (chanDiv[chan] & 0xFFF0) | (val & 0x0F);
+            latchedChan = chan;
+            latchedType = val & 0x10;
+        } else {
+            chan = latchedChan;
+            div = (chanDiv[chan] & 0x0F) | ((val & 0x3F) << 4);
+        }
+        if (latchedType) {
+            chanVol[chan] = val & 0x0F;
+        } else {
+            chanDiv[chan] = static_cast<std::int16_t>(div);
+        }
+    };
+
+    auto& fx = bank_.effect(effectIndex);
+    auto& outFrames = fx.frames;
+    std::fill(outFrames.begin(), outFrames.end(), AyfxCell{});
+    const std::size_t maxFrames = outFrames.size();
+
+    std::size_t ptr = 0x40;
+    long wait = 0;
+    bool done = false;
+    std::size_t pd = 0;
+    int pchan = channel;
+    int noiseDiv = 0;
+
+    while (!done && ptr < data.size()) {
+        const std::uint8_t op = data[ptr];
+        int incr = 0;
+        switch (op) {
+        case 0x50:
+            if (ptr + 1 < data.size()) psgOutPort(data[ptr + 1]);
+            incr = 2;
+            break;
+        case 0x4f:
+            incr = 2;
+            break;
+        case 0x61:
+            if (ptr + 2 < data.size()) {
+                wait += data[ptr + 1] + (static_cast<int>(data[ptr + 2]) << 8);
+            }
+            incr = 3;
+            break;
+        case 0x51:
+        case 0x52:
+        case 0x53:
+        case 0x54:
+            incr = 3;
+            break;
+        case 0x62:
+            wait += 735;
+            incr = 1;
+            break;
+        case 0x63:
+            wait += 882;
+            incr = 1;
+            break;
+        case 0x66:
+            done = true;
+            break;
+        default:
+            // Unrecognised command (e.g. a chip this importer doesn't know,
+            // like native AY8910 writes). The original has no length for
+            // this case either (incr stays 0) and would spin forever
+            // re-reading the same byte -- treat it as end of stream instead
+            // of hanging the app.
+            done = true;
+            break;
+        }
+        ptr += static_cast<std::size_t>(incr);
+
+        if (wait >= 735) {
+            if (pchan < 0) {
+                if (chanVol[0] < 15) {
+                    pchan = 0;
+                } else if (chanVol[1] < 15) {
+                    pchan = 1;
+                } else if (chanVol[2] < 15) {
+                    pchan = 2;
+                }
+            }
+
+            wait -= 735;
+
+            if (pchan >= 0) {
+                const int tvol = 15 - chanVol[pchan];
+                int nvol = mixNoise ? (15 - chanVol[3]) : 0;
+
+                if (mixNoise) {
+                    switch (chanDiv[3] & 3) {
+                    case 0: noiseDiv = 0x1f; break;
+                    case 1: noiseDiv = 0x19; break;
+                    case 2: noiseDiv = 0x10; break;
+                    case 3:
+                        noiseDiv = chanDiv[2] >> 1;
+                        if (noiseDiv > 63) noiseDiv = 63;
+                        break;
+                    default: break;
+                    }
+                }
+
+                int ovol = tvol;
+                if (nvol > tvol) ovol = nvol;
+
+                const int frq = (chanDiv[pchan] > 0) ? (baseFreq / (chanDiv[pchan] * 16)) : 100;
+                int toneDiv = kAYClockRateSpectrum / 8 / frq;
+                toneDiv = std::clamp(toneDiv, 0, 4095);
+
+                if (pd < maxFrames) {
+                    AyfxCell cell;
+                    cell.tone = static_cast<std::uint16_t>(toneDiv);
+                    cell.noise = static_cast<std::uint8_t>(noiseDiv);
+                    cell.volume = static_cast<std::uint8_t>(ovol);
+                    cell.toneEnable = tvol != 0;
+                    cell.noiseEnable = nvol != 0;
+                    outFrames[pd++] = cell;
+                }
+                if (pd >= maxFrames) {
+                    done = true;
+                }
+            }
         }
     }
 
