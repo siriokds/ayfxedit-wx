@@ -87,10 +87,28 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
     m_blip.clock_rate(clockRate);
     const blip_time_t cyclesPerFrame = clockRate / kFrameRate;
 
+    // Matches Ay_Apu::run_until()'s own inaudible_period threshold: periods
+    // at/below this collapse to a flat ~50% volume level there (see the
+    // comment on inaudible_freq in Ay_Apu.cpp for why that's the physically
+    // accurate thing to do, not just a shortcut). Used below to find frame
+    // boundaries where a channel crosses into/out of that state, so just
+    // those transitions can be smoothed -- not sustained normal tones,
+    // which naturally have large sample-to-sample swings of their own that
+    // must NOT be touched.
+    constexpr unsigned kInaudibleFreq = 16384;
+    const blip_time_t inaudiblePeriod = (static_cast<uint32_t>(clockRate) + kInaudibleFreq) / (kInaudibleFreq * 2);
+    auto isInaudibleTone = [&](const FrameData& f) {
+        const int period = (f.tone == 0 ? 1 : f.tone) * 16;
+        return f.toneEnable && period <= inaudiblePeriod;
+    };
+
     m_renderBuffer.clear();
     std::vector<blip_sample_t> mono;
+    std::vector<std::size_t> declickBoundaries;  // stereo-frame indices to smooth
+    bool prevInaudible = false;
 
-    for (const auto& f : frames) {
+    for (std::size_t fi = 0; fi < frames.size(); ++fi) {
+        const auto& f = frames[fi];
         m_apu.write(0, 0, f.tone & 0xFF);
         m_apu.write(0, 1, (f.tone >> 8) & 0x0F);
         m_apu.write(0, 6, f.noise & 0x1F);
@@ -102,6 +120,18 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
         m_apu.write(0, 7, mixer);
         m_apu.write(0, 8, f.volume & 0x0F);
 
+        // Smooth this boundary whenever *either* side is in the collapsed
+        // "inaudible tone" state -- not just when that state is entered or
+        // left. While it's held, any volume-register change alone
+        // (common: a decay tail steps volume down almost every frame while
+        // tone stays parked at 0) still makes Ay_Apu inject a fresh single
+        // hard edge to the new constant level, same as a state change does.
+        const bool nowInaudible = isInaudibleTone(f);
+        if (fi > 0 && (nowInaudible || prevInaudible)) {
+            declickBoundaries.push_back(m_renderBuffer.size() / 2);
+        }
+        prevInaudible = nowInaudible;
+
         m_apu.end_frame(cyclesPerFrame);
         m_blip.end_frame(cyclesPerFrame);
 
@@ -111,6 +141,28 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
         for (blip_sample_t s : mono) {
             m_renderBuffer.push_back(s);
             m_renderBuffer.push_back(s);  // mono -> stereo
+        }
+    }
+
+    // Smooth each such transition with a short (~1ms) ramp from the last
+    // pre-transition sample toward the new state's actual samples, instead
+    // of leaving Blip_Buffer's single hard edge there -- a continuous-time
+    // output wouldn't jump instantly either.
+    {
+        const int rampLen = std::max(1, m_config.sampleRate / 1000);
+        const std::size_t totalFrames = m_renderBuffer.size() / 2;
+        for (std::size_t b : declickBoundaries) {
+            if (b == 0 || b >= totalFrames) continue;
+            const double before = m_renderBuffer[(b - 1) * 2];
+            const std::size_t rampEnd = std::min(b + static_cast<std::size_t>(rampLen), totalFrames);
+            for (std::size_t i = b; i < rampEnd; ++i) {
+                const double t = static_cast<double>(i - b + 1) / static_cast<double>(rampEnd - b + 1);
+                const double target = m_renderBuffer[i * 2];
+                const double blended = before + (target - before) * t;
+                const auto v = static_cast<int16_t>(std::clamp(blended, -32768.0, 32767.0));
+                m_renderBuffer[i * 2]     = v;
+                m_renderBuffer[i * 2 + 1] = v;
+            }
         }
     }
 

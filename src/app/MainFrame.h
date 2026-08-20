@@ -35,6 +35,7 @@ private:
     void onImportVgm(wxCommandEvent& event);
     void onImportWav(wxCommandEvent& event);
     void onImportMp3(wxCommandEvent& event);
+    void onReclockEffect(wxCommandEvent& event);
     void onMultiLoadBank(wxCommandEvent& event);
     void onMultiSaveBank(wxCommandEvent& event);
     void onPrevEffect(wxCommandEvent& event);

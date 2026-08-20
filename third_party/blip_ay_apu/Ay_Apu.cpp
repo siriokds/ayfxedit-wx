@@ -18,9 +18,29 @@ Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA */
 // Emulation inaccuracies:
 // * Noise isn't run when not in use
 // * Changes to envelope and noise periods are delayed until next reload
+// * Super-sonic tone should attenuate output to about 60%, not 50%
+
+// Tones above this frequency are treated as disabled tone at half volume.
+// Power of two is more efficient (avoids division).
 //
-// MODIFIED from upstream: dropped the "supersonic tone == disabled tone at
-// half volume" shortcut from run_until() (see the comment there for why).
+// ayfxedit-wx history: this shortcut was removed for a while (see git log)
+// on the theory that the single hard digital step it produces, combined
+// with Blip_Buffer's own DC-blocking, was causing an audible click in
+// effects that toggle a channel's tone period between an audible value and
+// 0 every frame. Letting the true (~clock/32, tens of kHz) tone run
+// through Blip_Buffer unshortcut instead turned out worse: real chip
+// silicon settles a tone that fast to a near-DC level proportional to
+// volume (its analog output can't fully swing at that rate) -- it does
+// NOT keep ringing as an audible tone -- but Blip_Buffer's synthesis of
+// the *actual* tens-of-kHz square wave aliases back down into an audible
+// mid/high-frequency ripple instead of disappearing above Nyquist,
+// producing a persistent whistle, confirmed by ear and by inspecting the
+// rendered samples (see the ayfxedit-wx commit that restored this). So the
+// shortcut is back -- it's the physically-accurate behavior, not just a
+// perf hack -- and the original click is instead addressed by smoothing
+// frame-boundary discontinuities in AudioEngine::renderFrames() rather
+// than by letting Ay_Apu synthesize a tone that shouldn't be audible.
+static unsigned const inaudible_freq = 16384;
 
 static int const period_factor = 16;
 
@@ -222,24 +242,14 @@ void Ay_Apu::run_until( blip_time_t final_end_time )
 		osc_output->set_modified();
 
 		// period
-		//
-		// MODIFIED from upstream: upstream collapsed periods below
-		// inaudible_period into an artificial flat "half volume" DC level
-		// (osc_mode |= tone_off) to approximate a real chip's output-filter
-		// attenuation of supersonic tones cheaply. But arriving at that flat
-		// level via one instantaneous digital step, right after Blip_Buffer's
-		// own DC-blocking highpass, produces an audible click every time an
-		// ayfx effect toggles a channel's tone period between an audible
-		// value and 0 (a common "tone off without touching the T flag" trick
-		// in AYFX effect data, and a real one found in the sfxcollection
-		// bundled with this app). Real chip silicon doesn't have that abrupt
-		// digital edge, so this click isn't something you'd hear on the
-		// original chip. Letting the true (very fast, but computationally
-		// negligible for this app's short one-shot effects) toggle loop run
-		// unconditionally instead lets Blip_Buffer's own band-limited
-		// synthesis converge smoothly to essentially the same ~50% average
-		// level, with no artificial step and no click.
 		int half_vol = 0;
+		blip_time_t inaudible_period = (uint32_t) (osc_output->clock_rate() +
+				inaudible_freq) / (inaudible_freq * 2);
+		if ( osc->period <= inaudible_period && !(osc_mode & tone_off) )
+		{
+			half_vol = 1; // Actually around 60%, but 50% is close enough
+			osc_mode |= tone_off;
+		}
 
 		// envelope
 		blip_time_t start_time = last_time;

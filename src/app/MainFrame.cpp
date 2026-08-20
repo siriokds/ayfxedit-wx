@@ -87,6 +87,7 @@ enum : int {
     kIdImportMp3,
     kIdMultiLoadBank,
     kIdMultiSaveBank,
+    kIdReclockEffect,
     kIdExportScopeCurrent,
     kIdExportScopeAll,
     kIdNotImplemented
@@ -188,6 +189,111 @@ constexpr std::array<std::uint8_t, 256> kAyVolTab = {
     14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,14,15,15,15,15,15,15,
     15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,15,
 };
+
+// Reclock tool: converts an effect's stored tone/noise periods (raw AY
+// register values, clock-dependent) from one machine's clock to another,
+// so an effect authored for one machine sounds right at another's clock.
+// Not part of the original ayfxedit (which only ever assumed the ZX
+// Spectrum clock) -- a new tool.
+enum class ReclockStrategy { Clamp, OctaveShift, Mute };
+
+// Clamps a converted period into [0, maxValue] -- the simplest strategy:
+// out-of-range notes get flattened to the nearest representable extreme.
+int ReclockFitClamp(double period, int maxValue) {
+    return std::clamp(static_cast<int>(std::llround(period)), 0, maxValue);
+}
+
+// Repeatedly halves/doubles the period (i.e. shifts by octaves) until it
+// fits in range, only clamping as a last resort for ratios extreme enough
+// that no octave shift helps -- preserves the note's pitch class instead
+// of flattening it to the range boundary.
+int ReclockFitOctaveShift(double period, int maxValue) {
+    if (period <= 0.0) {
+        return 0;
+    }
+    while (period > maxValue) period /= 2.0;
+    while (period < 1.0) period *= 2.0;
+    return std::clamp(static_cast<int>(std::llround(period)), 0, maxValue);
+}
+
+// Preset + numeric-Hz widget pair shared between Audio Settings' "Machine"
+// picker and the reclock tool's source/destination pickers. Picking a
+// preset fills in the spin control; hand-editing the spin control (to a
+// value not matching any preset) switches the choice to "Custom".
+struct ClockPicker {
+    wxChoice* machineChoice;
+    wxSpinCtrl* clockSpin;
+};
+
+ClockPicker CreateClockPicker(wxWindow* parent, int initialHz) {
+    struct MachinePreset { const char* label; int clockHz; };
+    static const MachinePreset kPresets[] = {
+        {"ZX Spectrum", kAYClockRateSpectrum},
+        {"MSX", kAYClockRateMsx},
+        {"Amstrad CPC", kAYClockRateCpc},
+        {"Atari ST", kAYClockRateAtariSt},
+    };
+    constexpr int kPresetCount = static_cast<int>(std::size(kPresets));
+
+    auto* machineChoice = new wxChoice(parent, wxID_ANY);
+    for (const auto& p : kPresets) machineChoice->Append(p.label);
+    machineChoice->Append("Custom");
+
+    auto* clockSpin = new wxSpinCtrl(parent, wxID_ANY, wxEmptyString,
+                                     wxDefaultPosition, wxDefaultSize,
+                                     wxSP_ARROW_KEYS, 100000, 20000000, initialHz);
+
+    int initialSel = kPresetCount;  // Custom
+    for (int i = 0; i < kPresetCount; ++i) {
+        if (kPresets[i].clockHz == initialHz) { initialSel = i; break; }
+    }
+    machineChoice->SetSelection(initialSel);
+
+    machineChoice->Bind(wxEVT_CHOICE, [=](wxCommandEvent&) {
+        const int sel = machineChoice->GetSelection();
+        if (sel >= 0 && sel < kPresetCount) {
+            clockSpin->SetValue(kPresets[sel].clockHz);
+        }
+    });
+    clockSpin->Bind(wxEVT_SPINCTRL, [=](wxSpinEvent&) {
+        const int v = clockSpin->GetValue();
+        int sel = kPresetCount;  // Custom
+        for (int i = 0; i < kPresetCount; ++i) {
+            if (kPresets[i].clockHz == v) { sel = i; break; }
+        }
+        machineChoice->SetSelection(sel);
+    });
+
+    return {machineChoice, clockSpin};
+}
+
+void ReclockEffect(AyfxEffect& effect, int srcClockHz, int dstClockHz, ReclockStrategy strategy) {
+    if (srcClockHz <= 0 || dstClockHz <= 0 || srcClockHz == dstClockHz) {
+        return;
+    }
+    const double ratio = static_cast<double>(dstClockHz) / static_cast<double>(srcClockHz);
+
+    for (auto& cell : effect.frames) {
+        const double newTone = cell.tone * ratio;
+        const double newNoise = cell.noise * ratio;
+        const bool outOfRange = newTone > 4095.0 || newNoise > 31.0;
+
+        if (strategy == ReclockStrategy::Mute && outOfRange) {
+            cell.volume = 0;
+            cell.tone = static_cast<std::uint16_t>(ReclockFitClamp(newTone, 4095));
+            cell.noise = static_cast<std::uint8_t>(ReclockFitClamp(newNoise, 31));
+            continue;
+        }
+
+        if (strategy == ReclockStrategy::OctaveShift) {
+            cell.tone = static_cast<std::uint16_t>(ReclockFitOctaveShift(newTone, 4095));
+            cell.noise = static_cast<std::uint8_t>(ReclockFitOctaveShift(newNoise, 31));
+        } else {
+            cell.tone = static_cast<std::uint16_t>(ReclockFitClamp(newTone, 4095));
+            cell.noise = static_cast<std::uint8_t>(ReclockFitClamp(newNoise, 31));
+        }
+    }
+}
 
 struct EditorLayout {
     static constexpr int kXOff = 4;
@@ -552,6 +658,9 @@ void MainFrame::createMenu() {
     exportAllItem_ = exportMenu->AppendRadioItem(kIdExportScopeAll, "All effects");
     exportCurrentItem_->Check(true);
 
+    auto* toolsMenu = new wxMenu();
+    toolsMenu->Append(kIdReclockEffect, "Reclock...");
+
     auto* helpMenu = new wxMenu();
     helpMenu->Append(kIdAudioSettings, "Audio settings...");
     helpMenu->AppendSeparator();
@@ -563,6 +672,7 @@ void MainFrame::createMenu() {
     menuBar->Append(bankMenu, "&Bank");
     menuBar->Append(importMenu, "&Import");
     menuBar->Append(exportMenu, "&Export");
+    menuBar->Append(toolsMenu, "&Tools");
     menuBar->Append(helpMenu, "&Help");
     SetMenuBar(menuBar);
 
@@ -582,6 +692,7 @@ void MainFrame::createMenu() {
     Bind(wxEVT_MENU, &MainFrame::onImportMp3, this, kIdImportMp3);
     Bind(wxEVT_MENU, &MainFrame::onMultiLoadBank, this, kIdMultiLoadBank);
     Bind(wxEVT_MENU, &MainFrame::onMultiSaveBank, this, kIdMultiSaveBank);
+    Bind(wxEVT_MENU, &MainFrame::onReclockEffect, this, kIdReclockEffect);
 
     Bind(wxEVT_MENU, &MainFrame::onEditCut, this, kIdEditCut);
     Bind(wxEVT_MENU, &MainFrame::onEditCopy, this, kIdEditCopy);
@@ -683,45 +794,11 @@ void MainFrame::createMenu() {
 
              // Machine presets just fill in the clock field below; picking
              // "Custom" (or hand-editing the clock) leaves it to the user.
-             struct MachinePreset { const char* label; int clockHz; };
-             static const MachinePreset kPresets[] = {
-                 {"ZX Spectrum", kAYClockRateSpectrum},
-                 {"MSX", kAYClockRateMsx},
-                 {"Amstrad CPC", kAYClockRateCpc},
-                 {"Atari ST", kAYClockRateAtariSt},
-             };
-             constexpr int kPresetCount = static_cast<int>(std::size(kPresets));
-
-             auto* machineLabel  = new wxStaticText(&dlg, wxID_ANY, "Machine:");
-             auto* machineChoice = new wxChoice(&dlg, wxID_ANY);
-             for (const auto& p : kPresets) machineChoice->Append(p.label);
-             machineChoice->Append("Custom");
-
+             auto* machineLabel = new wxStaticText(&dlg, wxID_ANY, "Machine:");
+             auto clockPicker = CreateClockPicker(&dlg, cur.clockHz);
+             auto* machineChoice = clockPicker.machineChoice;
+             auto* clockSpin = clockPicker.clockSpin;
              auto* clockLabel = new wxStaticText(&dlg, wxID_ANY, "Clock (Hz):");
-             auto* clockSpin  = new wxSpinCtrl(&dlg, wxID_ANY, wxEmptyString,
-                                               wxDefaultPosition, wxDefaultSize,
-                                               wxSP_ARROW_KEYS, 100000, 20000000, cur.clockHz);
-
-             int initialSel = kPresetCount;  // Custom
-             for (int i = 0; i < kPresetCount; ++i) {
-                 if (kPresets[i].clockHz == cur.clockHz) { initialSel = i; break; }
-             }
-             machineChoice->SetSelection(initialSel);
-
-             machineChoice->Bind(wxEVT_CHOICE, [=](wxCommandEvent&) {
-                 const int sel = machineChoice->GetSelection();
-                 if (sel >= 0 && sel < kPresetCount) {
-                     clockSpin->SetValue(kPresets[sel].clockHz);
-                 }
-             });
-             clockSpin->Bind(wxEVT_SPINCTRL, [=](wxSpinEvent&) {
-                 const int v = clockSpin->GetValue();
-                 int sel = kPresetCount;  // Custom
-                 for (int i = 0; i < kPresetCount; ++i) {
-                     if (kPresets[i].clockHz == v) { sel = i; break; }
-                 }
-                 machineChoice->SetSelection(sel);
-             });
 
              auto* grid = new wxFlexGridSizer(6, 2, 6, 10);
              grid->AddGrowableCol(1, 1);
@@ -1678,6 +1755,73 @@ void MainFrame::onMultiSaveBank(wxCommandEvent& event) {
         wxMessageBox(wxString::Format("Saved %d effect(s).", saved),
                      "Multi-save", wxOK | wxICON_INFORMATION, this);
     }
+}
+
+void MainFrame::onReclockEffect(wxCommandEvent& event) {
+    (void)event;
+
+    wxDialog dlg(this, wxID_ANY, "Reclock effect",
+                 wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE);
+    auto* vs = new wxBoxSizer(wxVERTICAL);
+
+    auto* srcLabel = new wxStaticText(&dlg, wxID_ANY, "Source clock:");
+    auto srcPicker = CreateClockPicker(&dlg, kAYClockRateSpectrum);
+
+    auto* dstLabel = new wxStaticText(&dlg, wxID_ANY, "Destination clock:");
+    auto dstPicker = CreateClockPicker(&dlg, audioEngine_.config().clockHz);
+
+    auto* strategyLabel = new wxStaticText(&dlg, wxID_ANY, "Out-of-range periods:");
+    auto* strategyChoice = new wxChoice(&dlg, wxID_ANY);
+    strategyChoice->Append("Octave shift, then clamp");
+    strategyChoice->Append("Clamp");
+    strategyChoice->Append("Silence affected frames");
+    strategyChoice->SetSelection(0);
+
+    auto* grid = new wxFlexGridSizer(3, 3, 6, 10);
+    grid->AddGrowableCol(1, 1);
+    grid->AddGrowableCol(2, 1);
+    grid->Add(srcLabel, 0, wxALIGN_CENTER_VERTICAL);
+    grid->Add(srcPicker.machineChoice, 1, wxEXPAND);
+    grid->Add(srcPicker.clockSpin, 1, wxEXPAND);
+    grid->Add(dstLabel, 0, wxALIGN_CENTER_VERTICAL);
+    grid->Add(dstPicker.machineChoice, 1, wxEXPAND);
+    grid->Add(dstPicker.clockSpin, 1, wxEXPAND);
+    grid->Add(strategyLabel, 0, wxALIGN_CENTER_VERTICAL);
+    grid->Add(strategyChoice, 1, wxEXPAND);
+    grid->AddSpacer(0);
+
+    auto* scopeCurrent = new wxRadioButton(&dlg, wxID_ANY, "Current effect",
+                                           wxDefaultPosition, wxDefaultSize, wxRB_GROUP);
+    auto* scopeAll = new wxRadioButton(&dlg, wxID_ANY, "All effects");
+    scopeCurrent->SetValue(true);
+
+    vs->Add(grid, 0, wxEXPAND | wxALL, 12);
+    vs->Add(scopeCurrent, 0, wxLEFT | wxRIGHT | wxTOP, 12);
+    vs->Add(scopeAll, 0, wxLEFT | wxRIGHT | wxBOTTOM, 12);
+    vs->Add(dlg.CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0,
+            wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
+    dlg.SetSizerAndFit(vs);
+    dlg.SetMinSize(dlg.FromDIP(wxSize(380, -1)));
+
+    if (dlg.ShowModal() != wxID_OK) {
+        return;
+    }
+
+    const int srcHz = srcPicker.clockSpin->GetValue();
+    const int dstHz = dstPicker.clockSpin->GetValue();
+    ReclockStrategy strategy = ReclockStrategy::OctaveShift;
+    if (strategyChoice->GetSelection() == 1) strategy = ReclockStrategy::Clamp;
+    else if (strategyChoice->GetSelection() == 2) strategy = ReclockStrategy::Mute;
+
+    if (scopeAll->GetValue()) {
+        for (std::size_t i = 0; i < bank_.effectCount(); ++i) {
+            ReclockEffect(bank_.effect(i), srcHz, dstHz, strategy);
+        }
+    } else {
+        ReclockEffect(bank_.effect(currentEffect_), srcHz, dstHz, strategy);
+    }
+
+    refreshView();
 }
 
 void MainFrame::onPrevEffect(wxCommandEvent& event) {
