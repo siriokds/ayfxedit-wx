@@ -1,8 +1,19 @@
 # AY Sound FX Editor wx
 
-Cross-platform port of [AY Sound FX Editor v0.6](https://github.com/popovych-team/ayfxedit-improved) using wxWidgets 3.3 and miniaudio.
+Cross-platform port of [AY Sound FX Editor v0.6](https://github.com/Threetwosevensixseven/ayfxedit-improved) — a sound effect editor for the AY-3-8910/YM2149 PSG chip found in the ZX Spectrum 128, MSX, Amstrad CPC, and Atari ST — using wxWidgets 3.3 and miniaudio.
 
 Runs on Windows, Linux, and macOS.
+
+## Features
+
+- Effect grid editor with piano-style note input, linear/logarithmic period view, and hex T/N/Period/Noise/Volume columns, matching the original's editing model
+- Playback and export through a band-limited AY/YM emulator (game-music-emu's `Ay_Apu`/`Blip_Buffer`), rendered at 192kHz internally and downsampled through a 64-tap windowed-sinc filter, not the original's naive sample-and-hold synthesis
+- Selectable PSG chip (AY-3-8910 / YM2149) and clock rate, independently — presets for ZX Spectrum, MSX, Amstrad CPC, and Atari ST, or a custom clock
+- **Reclock tool**: converts an effect's (or a whole bank's) stored tone/noise periods between machine clocks, so effects made for one machine can be retuned for another, with a choice of out-of-range handling (octave shift, clamp, or silence)
+- **Export**: WAV, CSV, VTII Sample (Vortex Tracker II), single effect or whole bank
+- **Import**: PSG (AY register dump), VTX (Vortex Tracker's LH5-compressed format), VGM (SN76489 logs, converted to AY), WAV and MP3 (pitch/volume extraction via an AMDF-style tuner)
+- Multi-load/multi-save for whole banks of individual effect files
+- Native dark/light mode and system fonts/colours on macOS (see `DOCS/UI.md`)
 
 ## Dependencies
 
@@ -10,7 +21,9 @@ Runs on Windows, Linux, and macOS.
 |---------|---------|-------|
 | [wxWidgets](https://github.com/wxWidgets/wxWidgets) | 3.3.x | UI framework — build from source or use a package |
 | [miniaudio](https://github.com/mackron/miniaudio) | latest | Header-only audio output — included as submodule |
-| [dr_libs](https://github.com/mackron/dr_libs) | latest | Header-only audio decode — included as submodule |
+| [dr_libs](https://github.com/mackron/dr_libs) | latest | Header-only WAV/MP3 decode (`dr_wav.h`, `dr_mp3.h`) — included as submodule |
+| [game-music-emu](https://bitbucket.org/mpyne/game-music-emu) `Ay_Apu`/`Blip_Buffer` | — | Band-limited AY/YM synthesis core, vendored (with documented modifications) under `third_party/blip_ay_apu/`, not a submodule — only a handful of files are needed from a much larger multi-console repo |
+| ar002 `lh5` (Haruhiko Okumura) | — | Public-domain LZSS+Huffman decoder used for VTX import, vendored under `third_party/lh5/` |
 
 ## Building
 
@@ -58,3 +71,7 @@ cmake --build build-vs2022 --config Release
 ## File format
 
 Compatible with the original `.afb` (bank) and `.afx` (single effect) binary format.
+
+## Documentation
+
+See `DOCS/` for architecture, audio engine, data format, UI, and build notes.
