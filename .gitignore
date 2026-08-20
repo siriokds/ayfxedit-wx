@@ -11,6 +11,9 @@ build*/
 # Large support trees (original source reference, local wx build input)
 support/
 
+# Manual test fixtures/output (not part of the shipped app)
+test/
+
 # OS
 Thumbs.db
 .DS_Store
