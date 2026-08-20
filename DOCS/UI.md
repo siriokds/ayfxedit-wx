@@ -36,11 +36,11 @@ Single `wxFrame` (`MainFrame`). Default size: 640×620 DIP, minimum: 640×320 DI
 
 ### View
 
-| Item | Action |
-|---|---|
-| Piano input | Toggle piano input mode (UI stub, logic not yet implemented) |
-| Linear period | Display tone periods with linear scale bars |
-| Logarithmic period | Display tone periods with logarithmic scale bars |
+| Item | Shortcut | Action |
+|---|---|---|
+| Piano input | Ctrl+. or Ctrl+P | Shows/hides the Piano input window (see below) |
+| Linear period | — | Display tone periods with linear scale bars |
+| Logarithmic period | — | Display tone periods with logarithmic scale bars |
 
 ### Bank
 
@@ -76,9 +76,9 @@ Left to right:
 
 | Control | Type | Action |
 |---|---|---|
-| Play | `wxBitmapButton` (green triangle) | Pre-renders and plays the current effect |
+| Play | `wxBitmapButton` (green triangle) | Pre-renders and plays the current effect from frame 0 (Ctrl+Enter plays from the cursor row instead) |
 | Stop | `wxBitmapButton` (black square) | Stops playback |
-| Piano | `wxBitmapToggleButton` (piano icon) | Toggles piano input mode |
+| Piano | `wxBitmapToggleButton` (piano icon) | Shows/hides the Piano input window |
 | Add | `wxButton` | Adds a new empty effect |
 | Del | `wxButton` | Deletes the current effect |
 | `<<` | `wxButton` | First effect |
@@ -119,22 +119,27 @@ Bar widths are distributed at a **4:1:1** ratio (tone : noise : volume).
 | Linear | `1 + toneWidth × period / 4096` |
 | Logarithmic | `toneWidth × log(period / 8) / log(4095 / 8)` |
 
-### Colours (`EditorPalette::light()`)
+### Colours
 
-| Element | Colour |
+`EditorPalette::light()`/`dark()` hold the few colours with no OS-native equivalent (backgrounds, cell text, bar border, cursor-cell highlight, toolbar icon colours, the play-triangle green); `EditorPalette::current()` picks between them based on `wxSystemAppearance`. Everything else uses native system colours directly, so it also tracks the user's accent colour and light/dark switching automatically:
+
+| Element | Colour source |
 |---|---|
-| Background | White |
-| Normal text | Black |
-| Bar fill | Dark grey |
-| Selected row | `#C0FFC0` (light green) |
-| Cursor row | Black background, white text |
+| Background | `EditorPalette` — white (light) / `#202020` (dark) |
+| Normal text | `EditorPalette` — black (light) / `#E1E1E1` (dark) |
+| Bar fill | `wxSYS_COLOUR_HIGHLIGHT` (system accent); `wxSYS_COLOUR_HIGHLIGHTTEXT` instead when the row is selected, so it doesn't blend into the selection background |
+| Bar border | `EditorPalette` — black (light) / `#555555` (dark) |
+| Selected row | `wxSYS_COLOUR_HIGHLIGHT` background, `wxSYS_COLOUR_HIGHLIGHTTEXT` text |
+| Cursor cell | `EditorPalette` — black background/white text (light), inverted in dark |
+
+Period/Noise/Volume bars are drawn with rounded corners (macOS-style), not sharp rectangles.
 
 ### Mouse editing
 
 | Action | Effect |
 |---|---|
-| LMB click on Pos column | Move cursor to that row |
-| RMB click on Pos column | Deselect that row |
+| LMB click/drag on Pos column | Select that row (and drag to extend) |
+| RMB click/drag on Pos column | Deselect that row |
 | LMB/RMB drag on T or N column | Drag-paint tone/noise enable on/off |
 | Click/drag on bar area | Set value proportionally to cursor X position |
 | Click on hex text column | Move keyboard cursor to that row and column |
@@ -156,6 +161,30 @@ Fast drags interpolate across skipped rows.
 | `+` / `-` | Next / previous effect |
 | `PgUp` / `PgDn` | Page scroll |
 | `Home` / `End` | Jump to first / last frame |
+| `Enter` | Play the effect from frame 0 |
+| `Ctrl+Enter` | Play the effect from the cursor row |
+| `Space` | Stop playback |
+| `Ctrl+.` / `Ctrl+P` | Show/hide the Piano input window (two alternatives so a keyboard layout quirk in one doesn't strand the shortcut) |
+
+---
+
+## Piano input window
+
+`PianoWindow` (ported from the original's `TFormPiano`), a floating tool window shown/hidden via the toolbar piano icon, **View → Piano input**, or Ctrl+./Ctrl+P. Lets you write tone-period values by note instead of by hex digit.
+
+| Control | Type | Notes |
+|---|---|---|
+| Octave | `wxSpinCtrl` | 1–8, default 4 |
+| Step | `wxSpinCtrl` | 0–256; frames the cursor advances after each note |
+| Fill | `wxSpinCtrl` | 1–256; consecutive frames written per note; disabled and mirrors Step while "Link fill = step" is checked |
+| Set T | `wxCheckBox` | When checked, also sets the tone-enable flag on written frames |
+| Link fill = step | `wxCheckBox` | Checked by default |
+| Set volume | `wxCheckBox` | When checked, also writes the Volume spinner's value; when unchecked, volume is left untouched |
+| Volume | `wxSpinCtrl` | 0–15 |
+| Freq. table | `wxChoice` | Soundtracker / Protracker / ASM or PSC / Real / SQ Tracker — 5 note→period lookup tables copied verbatim from the original |
+| Keys | Custom-painted panel | 7 white keys (`Z X C V B N M`) + 5 black keys (`S D G H J`), labelled by their computer key, not note name |
+
+Playing a note — by clicking a key or pressing its mapped computer key — writes the note's AY period into the bank at the main window's cursor and advances it, exactly like the original's `EnterFromPiano`. Holding **Shift** shifts the note's octave up one; **Ctrl** shifts it down one. Numpad 1–8 sets the octave directly.
 
 ---
 
@@ -175,10 +204,14 @@ On OK, calls `AudioEngine::reconfigure(cfg)` which shuts down and reinitialises 
 
 ## Fonts
 
-The editor canvas uses a monospace font resolved via a fallback chain:
+The editor canvas uses a monospace font resolved via a fallback chain, body text at 14pt / column headers at 12pt:
 
 ```
 Consolas → Menlo → DejaVu Sans Mono → Liberation Mono → Courier New
 ```
 
+Each candidate is checked with `wxFontEnumerator::IsValidFacename()` — **not** `wxFont::IsOk()`, which on the macOS backend returns true even for a face that doesn't exist (Core Text silently substitutes something else instead of failing), which used to make the chain always "succeed" on Consolas and never reach Menlo there.
+
 On Windows, **UbuntuMono-Regular** and **UbuntuMono-Bold** are loaded at startup from resources embedded in the `.exe` (IDs 101 and 102) via `AddFontMemResourceEx`. These are preferred for the canvas rendering.
+
+Toolbar controls (buttons, the effect number/name fields) and the Piano window's controls use the platform's native default GUI font, unmodified — no custom size or face override.
