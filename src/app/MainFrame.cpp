@@ -34,6 +34,7 @@
 #include <wx/radiobut.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
+#include <wx/spinctrl.h>
 #include <wx/stdpaths.h>
 #include <wx/textctrl.h>
 #include <wx/tglbtn.h>
@@ -586,7 +587,61 @@ void MainFrame::createMenu() {
                                             wxDefaultPosition, wxDefaultSize,
                                             wxSL_HORIZONTAL | wxSL_LABELS);
 
-             auto* grid = new wxFlexGridSizer(3, 2, 6, 10);
+             // Chip type: same 4-bit (16-level) per-channel volume register on
+             // both, but AY-3-8910's envelope generator has 16 steps vs
+             // YM2149's 32 (see Ay_Apu::build_env_modes_()) plus a different
+             // per-channel DAC table. Independent of clock rate below --
+             // e.g. MSX machines run at the same clock whether they have a
+             // genuine AY-3-8910 or a YM2149 installed.
+             auto* chipLabel  = new wxStaticText(&dlg, wxID_ANY, "Chip:");
+             auto* chipChoice = new wxChoice(&dlg, wxID_ANY);
+             chipChoice->Append("AY-3-8910");
+             chipChoice->Append("YM2149");
+             chipChoice->SetSelection(cur.chipType == AyChipType::Ym2149 ? 1 : 0);
+
+             // Machine presets just fill in the clock field below; picking
+             // "Custom" (or hand-editing the clock) leaves it to the user.
+             struct MachinePreset { const char* label; int clockHz; };
+             static const MachinePreset kPresets[] = {
+                 {"ZX Spectrum", kAYClockRateSpectrum},
+                 {"MSX", kAYClockRateMsx},
+                 {"Amstrad CPC", kAYClockRateCpc},
+                 {"Atari ST", kAYClockRateAtariSt},
+             };
+             constexpr int kPresetCount = static_cast<int>(std::size(kPresets));
+
+             auto* machineLabel  = new wxStaticText(&dlg, wxID_ANY, "Machine:");
+             auto* machineChoice = new wxChoice(&dlg, wxID_ANY);
+             for (const auto& p : kPresets) machineChoice->Append(p.label);
+             machineChoice->Append("Custom");
+
+             auto* clockLabel = new wxStaticText(&dlg, wxID_ANY, "Clock (Hz):");
+             auto* clockSpin  = new wxSpinCtrl(&dlg, wxID_ANY, wxEmptyString,
+                                               wxDefaultPosition, wxDefaultSize,
+                                               wxSP_ARROW_KEYS, 100000, 20000000, cur.clockHz);
+
+             int initialSel = kPresetCount;  // Custom
+             for (int i = 0; i < kPresetCount; ++i) {
+                 if (kPresets[i].clockHz == cur.clockHz) { initialSel = i; break; }
+             }
+             machineChoice->SetSelection(initialSel);
+
+             machineChoice->Bind(wxEVT_CHOICE, [=](wxCommandEvent&) {
+                 const int sel = machineChoice->GetSelection();
+                 if (sel >= 0 && sel < kPresetCount) {
+                     clockSpin->SetValue(kPresets[sel].clockHz);
+                 }
+             });
+             clockSpin->Bind(wxEVT_SPINCTRL, [=](wxSpinEvent&) {
+                 const int v = clockSpin->GetValue();
+                 int sel = kPresetCount;  // Custom
+                 for (int i = 0; i < kPresetCount; ++i) {
+                     if (kPresets[i].clockHz == v) { sel = i; break; }
+                 }
+                 machineChoice->SetSelection(sel);
+             });
+
+             auto* grid = new wxFlexGridSizer(6, 2, 6, 10);
              grid->AddGrowableCol(1, 1);
              grid->Add(devLabel,  0, wxALIGN_CENTER_VERTICAL);
              grid->Add(devChoice, 1, wxEXPAND);
@@ -594,6 +649,12 @@ void MainFrame::createMenu() {
              grid->Add(rateChoice,1, wxEXPAND);
              grid->Add(volLabel,  0, wxALIGN_CENTER_VERTICAL);
              grid->Add(volSlider, 1, wxEXPAND);
+             grid->Add(chipLabel, 0, wxALIGN_CENTER_VERTICAL);
+             grid->Add(chipChoice,1, wxEXPAND);
+             grid->Add(machineLabel, 0, wxALIGN_CENTER_VERTICAL);
+             grid->Add(machineChoice, 1, wxEXPAND);
+             grid->Add(clockLabel, 0, wxALIGN_CENTER_VERTICAL);
+             grid->Add(clockSpin, 1, wxEXPAND);
 
              vs->Add(grid, 1, wxEXPAND | wxALL, 12);
              vs->Add(dlg.CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0,
@@ -606,6 +667,8 @@ void MainFrame::createMenu() {
              AudioConfig cfg = cur;
              cfg.sampleRate = kRates[rateChoice->GetSelection()];
              cfg.volume     = volSlider->GetValue();
+             cfg.chipType   = chipChoice->GetSelection() == 1 ? AyChipType::Ym2149 : AyChipType::Ay38910;
+             cfg.clockHz    = clockSpin->GetValue();
              // Device: selection 0 = default
              cfg.useDefaultDevice = true;
              audioEngine_.reconfigure(cfg);

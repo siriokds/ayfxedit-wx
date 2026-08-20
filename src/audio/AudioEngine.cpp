@@ -83,9 +83,7 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
     m_apu.reset();
     m_blip.clear();
 
-    const int clockRate = m_config.chipType == AyChipType::Ym2149
-                               ? kAYClockRateMsx
-                               : kAYClockRateSpectrum;
+    const int clockRate = m_config.clockHz;
     m_blip.clock_rate(clockRate);
     const blip_time_t cyclesPerFrame = clockRate / kFrameRate;
 

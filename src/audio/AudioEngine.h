@@ -10,8 +10,18 @@
 #include "miniaudio.h"
 
 static constexpr int kAudioSampleRate     = 48000;
-static constexpr int kAYClockRateSpectrum = 1773400;   // ZX Spectrum 128/+2/+3 (AY-3-8910)
-static constexpr int kAYClockRateMsx      = 3579545;   // MSX PSG, NTSC colourburst-derived (YM2149)
+
+// Well-known AY/YM PSG clock rates, in Hz. Clock rate is a property of the
+// machine's own bus/crystal, independent of which chip brand (AY-3-8910 vs
+// YM2149) happens to be installed -- e.g. MSX machines run at 3.579545 MHz
+// regardless of chip brand. These are UI presets (see MainFrame's Audio
+// Settings dialog); AudioConfig itself just stores the resulting Hz value,
+// so a user can also dial in an arbitrary clock.
+static constexpr int kAYClockRateSpectrum = 1773400;    // ZX Spectrum 128/+2/+3 (AY-3-8912)
+static constexpr int kAYClockRateMsx      = 1789772;    // MSX: NTSC colourburst 3.579545MHz / 2
+                                                          // (AY-3-8910 is only rated to 2MHz)
+static constexpr int kAYClockRateCpc      = 1000000;    // Amstrad CPC (AY-3-8912)
+static constexpr int kAYClockRateAtariSt  = 2000000;    // Atari ST (YM2149)
 
 enum class AyChipType { Ay38910, Ym2149 };
 
@@ -20,7 +30,8 @@ struct AudioConfig {
     ma_device_id deviceId{};       // valid only when useDefaultDevice == false
     int          sampleRate = kAudioSampleRate;
     int          volume = 50;  // 0-100
-    AyChipType   chipType = AyChipType::Ay38910;  // ZX Spectrum by default
+    AyChipType   chipType = AyChipType::Ay38910;      // DAC/envelope characteristics
+    int          clockHz  = kAYClockRateSpectrum;     // PSG clock rate
 };
 
 class AudioEngine {
