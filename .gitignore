@@ -1,0 +1,16 @@
+# Editor / IDE
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Build outputs
+build*/
+.local/
+
+# Large support trees (original source reference, local wx build input)
+support/
+
+# OS
+Thumbs.db
+.DS_Store
