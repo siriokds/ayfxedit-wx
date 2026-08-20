@@ -1,13 +1,14 @@
 # ayfxedit-wx source workspace
 
-This folder contains the new cross-platform implementation (wxWidgets 3.3 + SDL3).
+This folder contains the new cross-platform implementation (wxWidgets 3.3 + miniaudio).
 
 Planned layout:
 - app/: wxWidgets UI application
 - core/: reusable AYFX domain logic and file formats
-- audio/: SDL3 playback backend
+- audio/: miniaudio playback backend
 
 Dependencies and local third-party sources:
+- ../third_party/miniaudio: header-only audio playback library
 - ../third_party/dr_libs: utility single-header libraries available to the new code
 
 Current scaffold status:

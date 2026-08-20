@@ -7,10 +7,10 @@ ayfxedit-wx/
 ├── src/
 │   ├── app/            — wxWidgets UI (MainFrame, entry point)
 │   ├── core/           — Data model (BankModel, data structures)
-│   ├── audio/          — AY8910 emulator + SDL3 output
+│   ├── audio/          — AY8910 emulator + miniaudio output
 │   └── assets/fonts/   — Bundled TTF fonts (UbuntuMono)
 ├── sfxcollection/      — Sample effect library (.afx files)
-├── third_party/        — dr_libs (git submodule)
+├── third_party/        — miniaudio, dr_libs (git submodules)
 ├── support/            — References: original source, local wxWidgets
 └── DOCS/               — This documentation
 ```
@@ -28,7 +28,7 @@ ayfxedit-wx/
 │  AyfxEffect / AyfxCell — structures  │
 ├──────────────────────────────────────┤
 │  Audio layer  (src/audio/)           │
-│  AudioEngine — SDL3 playback         │
+│  AudioEngine — miniaudio playback    │
 │  AY8910      — chip emulator         │
 └──────────────────────────────────────┘
 ```
@@ -54,12 +54,12 @@ Pure data model with no wxWidgets dependency. Manages:
 - CRUD operations on effects (add, insert, delete)
 - Encoding/decoding of the compressed binary format
 
-### `AudioEngine` (`src/audio/AudioEngine.h/.cpp`, ~151 lines)
+### `AudioEngine` (`src/audio/AudioEngine.h/.cpp`, ~213 lines)
 
-SDL3 audio backend. Manages:
-- Initialisation and shutdown of the SDL3 audio subsystem
+miniaudio audio backend. Manages:
+- Initialisation and shutdown of the miniaudio playback device
 - Full pre-rendering of an effect into a PCM buffer (`std::vector<int16_t>`)
-- Buffer streaming via `SDL_AudioStream` with a push callback
+- Buffer streaming via a pull-based `ma_device` data callback
 - Output device enumeration (`enumerateDevices`)
 - Runtime reconfiguration (sample rate, volume, device)
 
@@ -79,9 +79,9 @@ Cycle-accurate AY-3-8910 chip emulator, derived from the Gearcoleco project (GPL
 | `src/core/BankModel.cpp` | 326 | File I/O, encode/decode, CRUD |
 | `src/audio/AY8910.h` | 59 | AY8910 declaration |
 | `src/audio/AY8910.cpp` | 356 | AY chip emulator |
-| `src/audio/AudioEngine.h` | 53 | `AudioConfig`, AudioEngine declaration |
-| `src/audio/AudioEngine.cpp` | 151 | SDL3 playback |
-| `src/CMakeLists.txt` | 98 | Build system |
+| `src/audio/AudioEngine.h` | 55 | `AudioConfig`, AudioEngine declaration |
+| `src/audio/AudioEngine.cpp` | 158 | miniaudio playback |
+| `src/CMakeLists.txt` | 81 | Build system |
 
 **Total source: ~3080 lines.**
 
@@ -90,7 +90,7 @@ Cycle-accurate AY-3-8910 chip emulator, derived from the Gearcoleco project (GPL
 | Feature | Status |
 |---|---|
 | Frame-by-frame editing | Complete |
-| AY8910 playback via SDL3 | Complete |
+| AY8910 playback via miniaudio | Complete |
 | Load/Save `.afb` and `.afx` | Complete |
 | Audio configuration (device, rate, volume) | Complete (not persisted) |
 | Import PSG / VTX / VGM / Wave | Stub (not implemented) |

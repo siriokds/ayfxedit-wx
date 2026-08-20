@@ -7,25 +7,14 @@
 | CMake | 3.24 |
 | C++ compiler | C++20 support (MSVC 2022, GCC 12+, Clang 15+) |
 | wxWidgets | 3.2+ |
-| SDL3 | Latest |
+
+Audio is provided by [miniaudio](https://github.com/mackron/miniaudio), vendored as a git submodule under `third_party/miniaudio` (header-only, statically compiled in — no separate install or DLL to ship).
 
 ---
 
 ## Windows (Visual Studio 2022)
 
-### 1. SDL3
-
-Download the SDL3 development package (MSVC) and extract to `C:\SDL3`. The CMake script expects:
-
-```
-C:\SDL3\include\SDL3\SDL.h
-C:\SDL3\lib\x64\SDL3.lib
-C:\SDL3\lib\x64\SDL3.dll
-```
-
-Or set `-DSDL3_ROOT=<your_path>` at configure time.
-
-### 2. wxWidgets
+### 1. wxWidgets
 
 Either install wxWidgets system-wide (vcpkg or manual build) so that CMake's `find_package(wxWidgets CONFIG)` can find it, or place a local build under:
 
@@ -35,18 +24,17 @@ Either install wxWidgets system-wide (vcpkg or manual build) so that CMake's `fi
 
 Alternatively build `support/wxWidgets-3.3.3/` from source and pass `-DAYFX_USE_LOCAL_WX=ON`.
 
-### 3. Configure and build
+### 2. Configure and build
 
 ```bat
 cmake -S src -B build-vs2022 -G "Visual Studio 17 2022" -A x64
 cmake --build build-vs2022 --config Release
 ```
 
-### 4. Output
+### 3. Output
 
 ```
 build-vs2022/Release/ayfxedit_wx.exe
-build-vs2022/Release/SDL3.dll          (copied automatically by post-build rule)
 ```
 
 ---
@@ -58,12 +46,6 @@ build-vs2022/Release/SDL3.dll          (copied automatically by post-build rule)
 **Ubuntu / Debian:**
 ```bash
 sudo apt install build-essential cmake libwxgtk3.2-dev
-```
-
-SDL3 must be built from source (not yet in most distro repos):
-```bash
-git clone https://github.com/libsdl-org/SDL.git -b main
-cd SDL && cmake -B build -DCMAKE_BUILD_TYPE=Release && sudo cmake --install build
 ```
 
 ### 2. Configure and build
@@ -86,7 +68,7 @@ build/ayfxedit_wx
 ### 1. Install dependencies via Homebrew
 
 ```bash
-brew install wxwidgets sdl3
+brew install wxwidgets
 ```
 
 ### 2. Configure and build
@@ -109,19 +91,19 @@ build/ayfxedit_wx
 | Option | Default | Description |
 |---|---|---|
 | `AYFX_USE_LOCAL_WX` | `OFF` | Use `support/wxWidgets-3.3.3/` instead of a system install |
-| `SDL3_ROOT` | `C:/SDL3` (Windows) | Path to SDL3 development package |
 
 ---
 
 ## Submodules
 
-Initialize `third_party/dr_libs` before building:
+Initialize submodules before building:
 
 ```bash
 git submodule update --init --recursive
 ```
 
-`dr_libs` provides `dr_wav.h`, `dr_mp3.h`, and `dr_flac.h` for future WAV/audio import-export. Currently only added to the include path; not yet called from source.
+- `third_party/miniaudio` provides `miniaudio.h`, used by `AudioEngine` for cross-platform audio playback. Header-only and statically compiled in — no separate install or DLL to ship.
+- `third_party/dr_libs` provides `dr_wav.h`, `dr_mp3.h`, and `dr_flac.h` for future WAV/audio import-export. Currently only added to the include path; not yet called from source.
 
 ---
 

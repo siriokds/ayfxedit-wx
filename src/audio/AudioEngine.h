@@ -4,13 +4,15 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include <memory>
 #include "AY8910.h"
-#include <SDL3/SDL.h>
+#include "miniaudio.h"
 
 struct AudioConfig {
-    SDL_AudioDeviceID deviceId = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
-    int sampleRate = kAudioSampleRate;
-    int volume = 50;  // 0-100
+    bool         useDefaultDevice = true;
+    ma_device_id deviceId{};       // valid only when useDefaultDevice == false
+    int          sampleRate = kAudioSampleRate;
+    int          volume = 50;  // 0-100
 };
 
 class AudioEngine {
@@ -39,13 +41,13 @@ public:
     const AudioConfig& config() const { return m_config; }
 
 private:
-    static void SDLCALL audioCallback(void* userdata, SDL_AudioStream* stream, int additional_bytes, int total_bytes);
-    void fillStream(SDL_AudioStream* stream, int additional_bytes);
+    static void dataCallback(ma_device* device, void* output, const void* input, ma_uint32 frameCount);
+    void fillOutput(int16_t* output, ma_uint32 frameCount);
     void renderFrames(const std::vector<FrameData>& frames);
 
-    AY8910            m_chip;
-    SDL_AudioStream*  m_stream  = nullptr;
-    AudioConfig       m_config;
+    AY8910                     m_chip;
+    std::unique_ptr<ma_device> m_device;
+    AudioConfig                m_config;
 
     std::vector<int16_t> m_renderBuffer;
     std::atomic<int>     m_readPos{0};

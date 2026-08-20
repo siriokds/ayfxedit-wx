@@ -165,11 +165,11 @@ Opened from **Help → Audio settings...**
 
 | Control | Type | Options |
 |---|---|---|
-| Output device | `wxChoice` | All SDL3 playback devices enumerated at open time |
+| Output device | `wxChoice` | All miniaudio playback devices enumerated at open time |
 | Sample rate | `wxChoice` | 22050 Hz, 44100 Hz, 48000 Hz, 96000 Hz |
 | Volume | `wxSlider` | 0–100 |
 
-On OK, calls `AudioEngine::reconfigure(cfg)` which shuts down and reinitialises the SDL3 audio stream with the new parameters. Settings are **not persisted** between sessions.
+On OK, calls `AudioEngine::reconfigure(cfg)` which shuts down and reinitialises the miniaudio playback device with the new parameters. Settings are **not persisted** between sessions.
 
 ---
 

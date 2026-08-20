@@ -5,7 +5,7 @@
 Audio playback is split into two classes:
 
 - **`AY8910`** — cycle-accurate emulator of the AY-3-8910 chip
-- **`AudioEngine`** — SDL3 wrapper that drives the emulator and streams PCM output
+- **`AudioEngine`** — miniaudio wrapper that drives the emulator and streams PCM output
 
 ## AY8910 Emulator (`src/audio/AY8910.h/.cpp`)
 
@@ -55,9 +55,10 @@ During playback, `AudioEngine` uses **channel A only**. Channels B and C are kep
 
 ```cpp
 struct AudioConfig {
-    SDL_AudioDeviceID deviceId = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
-    int sampleRate = 48000;
-    int volume     = 50;      // 0–100
+    bool         useDefaultDevice = true;
+    ma_device_id deviceId{};       // valid only when useDefaultDevice == false
+    int          sampleRate = 48000;
+    int          volume     = 50;      // 0–100
 };
 ```
 
@@ -65,26 +66,24 @@ struct AudioConfig {
 
 ```
 initialize(cfg)
-    → SDL_InitSubSystem(SDL_INIT_AUDIO)
-    → SDL_OpenAudioDeviceStream(...)  with audioCallback
+    → ma_device_init(nullptr, &deviceConfig, ...)  with dataCallback
     → AY8910::Init(kAYClock, cfg.sampleRate)
 
 play(frames)
     → AY8910::Reset()
     → for each frame: WriteReg × 4 + Tick(kAYClock/50) + EndFrame → append to m_renderBuffer
     → append ~100 ms trailing silence
-    → SDL_ResumeAudioStreamDevice()
+    → ma_device_start()
 
-audioCallback / fillStream
-    → pulls from m_renderBuffer using atomic read position
+dataCallback / fillOutput
+    → pulls from m_renderBuffer using atomic read position, zero-fills the tail
     → sets m_playing = false when exhausted
 
 reconfigure(cfg)
     → shutdown() + initialize(cfg)
 
 shutdown()
-    → SDL_DestroyAudioStream()
-    → SDL_QuitSubSystem(SDL_INIT_AUDIO)
+    → ma_device_uninit()
 ```
 
 ### Volume scaling
@@ -99,4 +98,4 @@ At `volume = 50` this gives `scale = 3`, mapping the 12288 peak to 36864 — wit
 
 ### Device enumeration
 
-`enumerateDevices()` calls `SDL_GetAudioPlaybackDevices()` and returns a `std::vector<std::string>` of device names. Used to populate the device selector in the Audio Settings dialog.
+`enumerateDevices()` opens a throwaway `ma_context`, calls `ma_context_get_devices()`, and returns a `std::vector<std::string>` of playback device names. Used to populate the device selector in the Audio Settings dialog (selection is not yet wired back to a specific `ma_device_id` — only the default device is currently used for playback).

@@ -35,6 +35,7 @@ private:
     void onEditorMouseUp(class wxMouseEvent& event);
     void onEditorMouseWheel(class wxMouseEvent& event);
     void onKeyDown(class wxKeyEvent& event);
+    void onSysColourChanged(class wxSysColourChangedEvent& event);
 
     void onEditCopy(wxCommandEvent& event);
     void onEditCut(wxCommandEvent& event);
@@ -86,6 +87,8 @@ private:
     class wxButton* addButton_ = nullptr;
     class wxButton* delButton_ = nullptr;
     class wxToggleButton* pianoButton_ = nullptr;
+    class wxBitmapButton* playButton_ = nullptr;
+    class wxBitmapButton* stopButton_ = nullptr;
     class wxPanel* editorPanel_ = nullptr;
     class wxMenuItem* exportCurrentItem_ = nullptr;
     class wxMenuItem* exportAllItem_ = nullptr;

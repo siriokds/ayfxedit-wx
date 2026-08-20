@@ -1,5 +1,6 @@
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
 #include "AudioEngine.h"
-#include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstring>
 
@@ -14,18 +15,22 @@ AudioEngine::~AudioEngine() {
 
 bool AudioEngine::initialize(const AudioConfig& cfg) {
     m_config = cfg;
-    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-        return false;
+
+    ma_device_config deviceConfig    = ma_device_config_init(ma_device_type_playback);
+    deviceConfig.playback.format     = ma_format_s16;
+    deviceConfig.playback.channels   = 2;
+    deviceConfig.sampleRate          = static_cast<ma_uint32>(m_config.sampleRate);
+    deviceConfig.dataCallback        = &AudioEngine::dataCallback;
+    deviceConfig.pUserData           = this;
+    if (!m_config.useDefaultDevice) {
+        deviceConfig.playback.pDeviceID = &m_config.deviceId;
     }
 
-    SDL_AudioSpec spec{};
-    spec.format   = SDL_AUDIO_S16;
-    spec.channels = 2;
-    spec.freq     = m_config.sampleRate;
-
-    m_stream = SDL_OpenAudioDeviceStream(
-        m_config.deviceId, &spec, audioCallback, this);
-    if (!m_stream) return false;
+    m_device = std::make_unique<ma_device>();
+    if (ma_device_init(nullptr, &deviceConfig, m_device.get()) != MA_SUCCESS) {
+        m_device.reset();
+        return false;
+    }
 
     m_chip.Init(kAYClock, m_config.sampleRate);
     return true;
@@ -33,34 +38,32 @@ bool AudioEngine::initialize(const AudioConfig& cfg) {
 
 void AudioEngine::shutdown() {
     stop();
-    if (m_stream) {
-        SDL_DestroyAudioStream(m_stream);
-        m_stream = nullptr;
+    if (m_device) {
+        ma_device_uninit(m_device.get());
+        m_device.reset();
     }
-    SDL_QuitSubSystem(SDL_INIT_AUDIO);
 }
 
 void AudioEngine::reconfigure(const AudioConfig& cfg) {
-    bool wasPlaying = isPlaying();
     shutdown();
     initialize(cfg);
-    (void)wasPlaying;
 }
 
 std::vector<std::string> AudioEngine::enumerateDevices() {
     std::vector<std::string> result;
-    if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) return result;
 
-    int count = 0;
-    SDL_AudioDeviceID* ids = SDL_GetAudioPlaybackDevices(&count);
-    if (ids) {
-        for (int i = 0; i < count; ++i) {
-            const char* name = SDL_GetAudioDeviceName(ids[i]);
-            if (name) result.push_back(name);
+    ma_context context;
+    if (ma_context_init(nullptr, 0, nullptr, &context) != MA_SUCCESS) return result;
+
+    ma_device_info* playbackInfos;
+    ma_uint32       playbackCount;
+    if (ma_context_get_devices(&context, &playbackInfos, &playbackCount, nullptr, nullptr) == MA_SUCCESS) {
+        for (ma_uint32 i = 0; i < playbackCount; ++i) {
+            result.push_back(playbackInfos[i].name);
         }
-        SDL_free(ids);
     }
-    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+
+    ma_context_uninit(&context);
     return result;
 }
 
@@ -102,19 +105,18 @@ void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {
 }
 
 void AudioEngine::play(const std::vector<FrameData>& frames) {
-    if (frames.empty() || !m_stream) return;
+    if (frames.empty() || !m_device) return;
     stop();
     renderFrames(frames);
     m_readPos.store(0);
     m_playing.store(true);
-    SDL_ResumeAudioStreamDevice(m_stream);
+    ma_device_start(m_device.get());
 }
 
 void AudioEngine::stop() {
     m_playing.store(false);
-    if (m_stream) {
-        SDL_PauseAudioStreamDevice(m_stream);
-        SDL_ClearAudioStream(m_stream);
+    if (m_device) {
+        ma_device_stop(m_device.get());
     }
 }
 
@@ -122,27 +124,32 @@ bool AudioEngine::isPlaying() const {
     return m_playing.load();
 }
 
-void SDLCALL AudioEngine::audioCallback(void* userdata, SDL_AudioStream* stream,
-                                         int additional_bytes, int /*total_bytes*/) {
-    static_cast<AudioEngine*>(userdata)->fillStream(stream, additional_bytes);
+void AudioEngine::dataCallback(ma_device* device, void* output, const void* /*input*/, ma_uint32 frameCount) {
+    static_cast<AudioEngine*>(device->pUserData)->fillOutput(static_cast<int16_t*>(output), frameCount);
 }
 
-void AudioEngine::fillStream(SDL_AudioStream* stream, int additional_bytes) {
-    if (!m_playing.load()) return;
+void AudioEngine::fillOutput(int16_t* output, ma_uint32 frameCount) {
+    const int needed = static_cast<int>(frameCount) * 2;  // stereo
 
-    int needed  = additional_bytes / static_cast<int>(sizeof(int16_t));
+    if (!m_playing.load()) {
+        std::memset(output, 0, needed * sizeof(int16_t));
+        return;
+    }
+
     int readPos = m_readPos.load();
     int avail   = static_cast<int>(m_renderBuffer.size()) - readPos;
 
     if (avail <= 0) {
         m_playing.store(false);
+        std::memset(output, 0, needed * sizeof(int16_t));
         return;
     }
 
     int toCopy = std::min(needed, avail);
-    SDL_PutAudioStreamData(stream,
-        m_renderBuffer.data() + readPos,
-        toCopy * static_cast<int>(sizeof(int16_t)));
+    std::memcpy(output, m_renderBuffer.data() + readPos, toCopy * sizeof(int16_t));
+    if (toCopy < needed) {
+        std::memset(output + toCopy, 0, (needed - toCopy) * sizeof(int16_t));
+    }
     m_readPos.store(readPos + toCopy);
 
     if (readPos + toCopy >= static_cast<int>(m_renderBuffer.size())) {

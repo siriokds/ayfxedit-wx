@@ -4,7 +4,7 @@
 
 **AY Sound FX Editor** is a well-known program for composing sound effects targeting the **AY-3-8910 / AY8910** programmable sound generator — the chip used in **ZX Spectrum**, **MSX**, **Amstrad CPC**, and many other 8-bit computers of the 1980s. The original program (v0.6, by shiru@mail.ru) was Windows-only.
 
-**ayfxedit-wx** is a cross-platform port (Windows / Linux / macOS) built with **wxWidgets 3.2+** and **SDL3**, written in C++20.
+**ayfxedit-wx** is a cross-platform port (Windows / Linux / macOS) built with **wxWidgets 3.2+** and **miniaudio**, written in C++20.
 
 ## Purpose
 
@@ -20,7 +20,7 @@ The program lets you compose sound effects frame by frame for the AY-3-8910 chip
 | File | Contents |
 |---|---|
 | `ARCHITECTURE.md` | Code structure, main classes, layers |
-| `AUDIO_ENGINE.md` | AY8910 emulator and SDL3 integration |
+| `AUDIO_ENGINE.md` | AY8910 emulator and miniaudio integration |
 | `DATA_FORMATS.md` | Binary format for `.afx` (single effect) and `.afb` (bank) |
 | `UI.md` | User interface, menus, toolbar, editor canvas |
 | `BUILD.md` | Build instructions for Windows, Linux, macOS |
@@ -30,7 +30,7 @@ The program lets you compose sound effects frame by frame for the AY-3-8910 chip
 | Library | Version | Role |
 |---|---|---|
 | wxWidgets | 3.2+ | Cross-platform UI framework |
-| SDL3 | latest | PCM audio output |
+| miniaudio | git submodule | PCM audio output |
 | dr_libs | git submodule | WAV read/write (for future import/export) |
 | UbuntuMono | bundled TTF | Monospace font used in the editor canvas |
 
@@ -39,5 +39,5 @@ The program lets you compose sound effects frame by frame for the AY-3-8910 chip
 | OS | Status |
 |---|---|
 | Windows 10/11 | Primary, tested with VS2022 |
-| Linux | Supported (CMake + SDL3 via pkg-manager) |
-| macOS | Supported (brew wxwidgets + SDL3) |
+| Linux | Supported |
+| macOS | Supported (brew wxwidgets) |

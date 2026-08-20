@@ -18,6 +18,7 @@
 #include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/font.h>
+#include <wx/fontenum.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/panel.h>
@@ -144,6 +145,13 @@ BarLayout ComputeBarLayout(const wxWindow* w) {
 wxFont MakeEditorFont(int pointSize, bool bold = false) {
     // Platform-native monospace chain: light/regular weight preferred.
     // Windows: Consolas; macOS: Menlo; Linux: DejaVu Sans Mono / Liberation Mono.
+    //
+    // NOTE: wxFont::IsOk() is not a reliable "does this face exist" check —
+    // on the macOS/Cocoa backend it returns true even for a face name that
+    // doesn't exist (Core Text silently substitutes a default font instead
+    // of failing), so it always accepted the first ("Consolas") candidate
+    // there and never fell through to Menlo. wxFontEnumerator::IsValidFacename
+    // actually queries font availability and must be used instead.
     static const char* kFaces[] = {
         "Consolas",        // Windows
         "Menlo",           // macOS
@@ -152,12 +160,25 @@ wxFont MakeEditorFont(int pointSize, bool bold = false) {
         "Courier New",     // universal fallback
     };
     for (const char* face : kFaces) {
-        wxFont f = wxFontInfo(pointSize).Family(wxFONTFAMILY_TELETYPE).FaceName(face).Bold(bold);
-        if (f.IsOk()) {
-            return f;
+        if (wxFontEnumerator::IsValidFacename(face)) {
+            return wxFontInfo(pointSize).Family(wxFONTFAMILY_TELETYPE).FaceName(face).Bold(bold);
         }
     }
     return wxFontInfo(pointSize).Family(wxFONTFAMILY_TELETYPE).Bold(bold);
+}
+
+wxFont MakeUiFont(int pointSize) {
+    // Segoe UI is the intended look on Windows (the platform default, "MS
+    // Shell Dlg 2", looks dated) at a hand-picked point size; it doesn't
+    // exist elsewhere.
+    if (wxFontEnumerator::IsValidFacename("Segoe UI")) {
+        return wxFontInfo(pointSize).Family(wxFONTFAMILY_SWISS).FaceName("Segoe UI");
+    }
+    // Elsewhere, trust the platform's own default UI font at its own natural
+    // size rather than forcing the Windows-tuned point size onto it: macOS's
+    // default GUI font is 11pt here, and forcing it down to 9/10 made the
+    // toolbar read smaller than Finder's own default text.
+    return wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
 }
 
 int EditorPointSize() {
@@ -240,6 +261,29 @@ struct EditorPalette {
         };
         return p;
     }
+
+    static const EditorPalette& dark() {
+        static const EditorPalette p = {
+            wxColour( 32,  32,  32),  // background
+            wxColour(225, 225, 225),  // text
+            wxColour(150, 150, 150),  // barFill
+            wxColour(210, 210, 210),  // barBorder
+            wxColour( 40,  90,  40),  // selection
+            wxColour(255, 255, 255),  // cursorBg
+            wxColour(  0,   0,   0),  // cursorText
+            wxColour(225, 225, 225),  // iconFg
+            wxColour( 32,  32,  32),  // iconBg
+            wxColour(  0, 210,   0),  // playFill
+            wxColour( 60, 170,  60),  // playBorder
+        };
+        return p;
+    }
+
+    // Picks light() or dark() to match the current system/app appearance
+    // (wxWidgets 3.3's native dark mode support — see wxSystemAppearance).
+    static const EditorPalette& current() {
+        return wxSystemSettings::GetAppearance().IsDark() ? dark() : light();
+    }
 };
 
 wxBitmap CreateToolbarBitmap(const wxWindow* w) {
@@ -254,7 +298,7 @@ wxBitmap CreateToolbarBitmap(const wxWindow* w) {
 }
 
 wxBitmap MakePlayBitmap(const wxWindow* w) {
-    const EditorPalette& pal = EditorPalette::light();
+    const EditorPalette& pal = EditorPalette::current();
     wxBitmap bmp = CreateToolbarBitmap(w);
     wxMemoryDC mdc;
     mdc.SelectObject(bmp);
@@ -278,7 +322,7 @@ wxBitmap MakePlayBitmap(const wxWindow* w) {
 }
 
 wxBitmap MakeStopBitmap(const wxWindow* w) {
-    const EditorPalette& pal = EditorPalette::light();
+    const EditorPalette& pal = EditorPalette::current();
     wxBitmap bmp = CreateToolbarBitmap(w);
     wxMemoryDC mdc;
     mdc.SelectObject(bmp);
@@ -292,7 +336,7 @@ wxBitmap MakeStopBitmap(const wxWindow* w) {
 }
 
 wxBitmap MakePianoBitmap(const wxWindow* w) {
-    const EditorPalette& pal = EditorPalette::light();
+    const EditorPalette& pal = EditorPalette::current();
     wxBitmap bmp = CreateToolbarBitmap(w);
     wxMemoryDC mdc;
     mdc.SelectObject(bmp);
@@ -530,7 +574,7 @@ void MainFrame::createMenu() {
              cfg.sampleRate = kRates[rateChoice->GetSelection()];
              cfg.volume     = volSlider->GetValue();
              // Device: selection 0 = default
-             cfg.deviceId   = SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK;
+             cfg.useDefaultDevice = true;
              audioEngine_.reconfigure(cfg);
          },
          kIdAudioSettings);
@@ -559,30 +603,27 @@ void MainFrame::createMenu() {
 
 void MainFrame::createContent() {
     auto* panel = new wxPanel(this);
-    panel->SetFont(wxFontInfo(9).Family(wxFONTFAMILY_SWISS).FaceName("Segoe UI"));
+    panel->SetFont(MakeUiFont(9));
     const int pad = panel->FromDIP(1);
     const int padOuter = panel->FromDIP(4);
-    const int btnH = panel->FromDIP(22);
-    const int smallBtnW = panel->FromDIP(30);
-    const int navBtnW = panel->FromDIP(28);
     const int toolSide = panel->FromDIP(22);
     auto* rootSizer = new wxBoxSizer(wxVERTICAL);
 
     auto* topBar = new wxBoxSizer(wxHORIZONTAL);
-    auto* playButton = new wxBitmapButton(panel,
-                                          kIdPlayEffect,
-                                          wxBitmapBundle::FromBitmap(MakePlayBitmap(panel)),
-                                          wxDefaultPosition,
-                                          wxSize(toolSide, toolSide));
-    auto* stopButton = new wxBitmapButton(panel,
-                                          kIdStopEffect,
-                                          wxBitmapBundle::FromBitmap(MakeStopBitmap(panel)),
-                                          wxDefaultPosition,
-                                          wxSize(toolSide, toolSide));
-    playButton->SetToolTip("Play effect [Enter]");
-    stopButton->SetToolTip("Stop effect [Space]");
-    topBar->Add(playButton, 0, wxALL, pad);
-    topBar->Add(stopButton, 0, wxALL, pad);
+    playButton_ = new wxBitmapButton(panel,
+                                     kIdPlayEffect,
+                                     wxBitmapBundle::FromBitmap(MakePlayBitmap(panel)),
+                                     wxDefaultPosition,
+                                     wxSize(toolSide, toolSide));
+    stopButton_ = new wxBitmapButton(panel,
+                                     kIdStopEffect,
+                                     wxBitmapBundle::FromBitmap(MakeStopBitmap(panel)),
+                                     wxDefaultPosition,
+                                     wxSize(toolSide, toolSide));
+    playButton_->SetToolTip("Play effect [Enter]");
+    stopButton_->SetToolTip("Stop effect [Space]");
+    topBar->Add(playButton_, 0, wxALL, pad);
+    topBar->Add(stopButton_, 0, wxALL, pad);
     pianoButton_ = new wxBitmapToggleButton(panel,
                                             kIdViewPiano,
                                             wxBitmapBundle::FromBitmap(MakePianoBitmap(panel)),
@@ -598,20 +639,35 @@ void MainFrame::createContent() {
     prevButton_ = new wxButton(panel, kIdPrevEffect, "<");
     nextButton_ = new wxButton(panel, kIdNextEffect, ">");
     lastButton_ = new wxButton(panel, kIdLastEffect, ">>");
+
+    // Sized from the label's actual text extent plus a small fixed padding
+    // (floored to the original DIP values) rather than a hardcoded pixel
+    // width or wxButton::GetBestSize() — a fixed width tuned for one
+    // platform's font metrics clips the label on another (e.g. "Add"
+    // truncating to "A..." under the larger native macOS UI font), while
+    // GetBestSize() over-corrects: its native macOS button chrome padding is
+    // much more generous than the compact toolbar look this app wants.
+    const int hPad = panel->FromDIP(14);
+    auto textW = [&](const wxString& s) { return panel->GetTextExtent(s).GetWidth(); };
+    const int btnH = std::max(panel->FromDIP(22), panel->GetTextExtent("Add").GetHeight() + panel->FromDIP(8));
+    const int smallBtnW = std::max(panel->FromDIP(30), std::max(textW("Add"), textW("Del")) + hPad);
+    const int navBtnW = std::max(panel->FromDIP(28),
+        std::max({textW("<<"), textW("<"), textW(">"), textW(">>")}) + hPad);
+
     effectNumberText_ = new wxTextCtrl(panel,
                                        wxID_ANY,
                                        "",
                                        wxDefaultPosition,
                                        panel->FromDIP(wxSize(80, btnH)),
-                                       wxTE_READONLY | wxBORDER_SIMPLE);
+                                       wxTE_READONLY);
     effectNameText_ = new wxTextCtrl(panel,
                                      wxID_ANY,
                                      "",
                                      wxDefaultPosition,
                                      panel->FromDIP(wxSize(240, btnH)),
-                                     wxTE_PROCESS_ENTER | wxBORDER_SIMPLE);
+                                     wxTE_PROCESS_ENTER);
 
-    const wxFont dataFont = wxFontInfo(10).Family(wxFONTFAMILY_SWISS).FaceName("Segoe UI");
+    const wxFont dataFont = MakeUiFont(10);
     effectNumberText_->SetFont(dataFont);
     effectNameText_->SetFont(dataFont);
     effectNameText_->SetEditable(false);
@@ -713,6 +769,11 @@ void MainFrame::createContent() {
     // focus on mouse-down; a plain wxEVT_KEY_DOWN bound to the frame would then
     // never receive arrow/hex/T/N key presses.
     Bind(wxEVT_CHAR_HOOK, &MainFrame::onKeyDown, this);
+
+    // Fires when the system/app appearance changes (e.g. macOS/Windows dark
+    // mode toggle) so the custom-painted editor canvas and hand-drawn toolbar
+    // icons — which native theming doesn't reach — can be repainted to match.
+    Bind(wxEVT_SYS_COLOUR_CHANGED, &MainFrame::onSysColourChanged, this);
 
     panel->SetSizer(rootSizer);
 }
@@ -1084,6 +1145,23 @@ void MainFrame::onEditorMouseWheel(wxMouseEvent& event) {
 
     clampView();
     refreshView();
+}
+
+void MainFrame::onSysColourChanged(wxSysColourChangedEvent& event) {
+    event.Skip();  // let native controls restyle themselves too
+
+    if (playButton_) {
+        playButton_->SetBitmap(wxBitmapBundle::FromBitmap(MakePlayBitmap(playButton_)));
+    }
+    if (stopButton_) {
+        stopButton_->SetBitmap(wxBitmapBundle::FromBitmap(MakeStopBitmap(stopButton_)));
+    }
+    if (pianoButton_) {
+        pianoButton_->SetBitmap(wxBitmapBundle::FromBitmap(MakePianoBitmap(pianoButton_)));
+    }
+    if (editorPanel_) {
+        editorPanel_->Refresh();
+    }
 }
 
 void MainFrame::onKeyDown(wxKeyEvent& event) {
@@ -1755,7 +1833,7 @@ void MainFrame::drawEditor(wxDC& dc) {
         return;
     }
 
-    const EditorPalette& pal = EditorPalette::light();
+    const EditorPalette& pal = EditorPalette::current();
     const wxColour& colBackground = pal.background;
     const wxColour& colBarFill    = pal.barFill;
     const wxColour& colTextActive = pal.text;
@@ -1850,21 +1928,25 @@ void MainFrame::drawEditor(wxDC& dc) {
         drawCellText(1, xOff + nColOff, wxString::Format("%02X", static_cast<unsigned>(cell.noise & 0x1Fu)));
         drawCellText(2, xOff + vColOff, wxString::Format("%X", static_cast<unsigned>(cell.volume & 0x0Fu)));
 
-        // Bars: black border, white bg, dark-grey fill; barPad pixels of vertical margin
+        // Bars: rounded border (macOS-style), fill in the system accent
+        // colour; barPad pixels of vertical margin
         const int bh = lineH - barPad * 2;
+        const double barRadius = Dip(editorPanel_, 3);
+        const double fillRadius = std::max(0.0, barRadius - 1);
+        const wxColour colBarAccent = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT);
 
         dc.SetBrush(wxBrush(back));
         dc.SetPen(wxPen(pal.barBorder));
-        dc.DrawRectangle(xOff + toneOff,  y + barPad, toneW,  bh);
-        dc.DrawRectangle(xOff + noiseOff, y + barPad, noiseW, bh);
-        dc.DrawRectangle(xOff + volOff,   y + barPad, volW,   bh);
+        dc.DrawRoundedRectangle(xOff + toneOff,  y + barPad, toneW,  bh, barRadius);
+        dc.DrawRoundedRectangle(xOff + noiseOff, y + barPad, noiseW, bh, barRadius);
+        dc.DrawRoundedRectangle(xOff + volOff,   y + barPad, volW,   bh, barRadius);
 
         // Fill inside the border when the cell has any non-zero data.
         // Ghost rows (all zeros) are left empty; no separate "dim" colour.
         const bool hasData = cell.tone > 0 || cell.noise > 0 || cell.volume > 0;
         if (hasData) {
             dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.SetBrush(wxBrush(colBarFill));
+            dc.SetBrush(wxBrush(colBarAccent));
 
             const int inner = bh - 2;
             const int innerToneW  = toneW  - 2;
@@ -1875,21 +1957,21 @@ void MainFrame::drawEditor(wxDC& dc) {
             if (toneBar < Dip(editorPanel_, 2) && cell.tone > 0) { toneBar = Dip(editorPanel_, 2); }
             toneBar = std::clamp(toneBar, 0, innerToneW);
             if (toneBar > 0) {
-                dc.DrawRectangle(xOff + toneOff + 1, y + barPad + 1, toneBar, inner);
+                dc.DrawRoundedRectangle(xOff + toneOff + 1, y + barPad + 1, toneBar, inner, fillRadius);
             }
 
             int noiseBar = (cell.noise * innerNoiseW) / 31;
             if (noiseBar < Dip(editorPanel_, 2) && cell.noise > 0) { noiseBar = Dip(editorPanel_, 2); }
             noiseBar = std::clamp(noiseBar, 0, innerNoiseW);
             if (noiseBar > 0) {
-                dc.DrawRectangle(xOff + noiseOff + 1, y + barPad + 1, noiseBar, inner);
+                dc.DrawRoundedRectangle(xOff + noiseOff + 1, y + barPad + 1, noiseBar, inner, fillRadius);
             }
 
             int volBar = (cell.volume * innerVolW) / 15;
             if (volBar < Dip(editorPanel_, 2) && cell.volume > 0) { volBar = Dip(editorPanel_, 2); }
             volBar = std::clamp(volBar, 0, innerVolW);
             if (volBar > 0) {
-                dc.DrawRectangle(xOff + volOff + 1, y + barPad + 1, volBar, inner);
+                dc.DrawRoundedRectangle(xOff + volOff + 1, y + barPad + 1, volBar, inner, fillRadius);
             }
         }
 

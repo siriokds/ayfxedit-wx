@@ -78,6 +78,19 @@ bool RegisterBundledFonts() {
 class AyfxApp final : public wxApp {
 public:
     bool OnInit() override {
+#ifdef _WIN32
+        // Opt into following the OS light/dark theme; MSW otherwise defaults
+        // to light regardless of the system setting (wxWidgets 3.3+).
+        //
+        // Deliberately NOT called on macOS/GTK: appearance already follows
+        // the system there automatically and live (verified — toggling OS
+        // dark mode while the app is running restyles it immediately). Calling
+        // SetAppearance(System) on macOS was tested and found to pin the
+        // window to whatever appearance was active at startup instead,
+        // breaking live switching (wxWidgets 3.3.2) — so it's MSW-only here.
+        SetAppearance(Appearance::System);
+#endif
+
         RegisterBundledFonts();
         auto* frame = new MainFrame();
         frame->Show(true);
