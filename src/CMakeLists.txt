@@ -43,10 +43,14 @@ add_executable(ayfxedit_wx WIN32
     app/MainFrame.h
     app/PianoWindow.cpp
     app/PianoWindow.h
+    app/SettingsDialog.cpp
+    app/SettingsDialog.h
     core/BankModel.h
     core/BankModel.cpp
     core/VtxDecoder.h
     core/VtxDecoder.cpp
+    core/Settings.h
+    core/Settings.cpp
     audio/AudioEngine.h
     audio/AudioEngine.cpp
     audio/WaveExport.h

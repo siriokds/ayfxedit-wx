@@ -78,6 +78,12 @@ bool RegisterBundledFonts() {
 class AyfxApp final : public wxApp {
 public:
     bool OnInit() override {
+        // Deliberately set: without it, wx derives the app name (used by
+        // wxStandardPaths for the settings file's directory, among other
+        // things) from the executable name, which would silently change if
+        // the build target is ever renamed.
+        SetAppName("ayfxedit-wx");
+
 #ifdef _WIN32
         // Opt into following the OS light/dark theme; MSW otherwise defaults
         // to light regardless of the system setting (wxWidgets 3.3+).

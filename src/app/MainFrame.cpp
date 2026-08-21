@@ -1,5 +1,6 @@
 #include "MainFrame.h"
 #include "PianoWindow.h"
+#include "SettingsDialog.h"
 #include "../audio/WaveExport.h"
 #include "../core/VtxDecoder.h"
 #include "dr_wav.h"
@@ -651,6 +652,11 @@ void MainFrame::createMenu() {
     fileMenu->Append(kIdMultiLoadBank, "Multi-load to bank...");
     fileMenu->Append(kIdMultiSaveBank, "Multi-save from bank...");
     fileMenu->AppendSeparator();
+    // wxID_PREFERENCES is auto-relocated by wx into the app menu on macOS
+    // (with the platform-standard Cmd+, accelerator), same mechanism as
+    // wxID_ABOUT/wxID_EXIT; on Windows/Linux it stays here, under File.
+    fileMenu->Append(wxID_PREFERENCES, "&Preferences...");
+    fileMenu->AppendSeparator();
     fileMenu->Append(wxID_EXIT, "E&xit");
 
     auto* editMenu = new wxMenu();
@@ -899,6 +905,13 @@ void MainFrame::createMenu() {
          wxID_ABOUT);
 
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { Close(true); }, wxID_EXIT);
+
+    Bind(wxEVT_MENU,
+         [this](wxCommandEvent&) {
+             SettingsDialog dlg(this);
+             dlg.ShowModal();
+         },
+         wxID_PREFERENCES);
 
     wxAcceleratorEntry entries[10];
     entries[0].Set(wxACCEL_CTRL, static_cast<int>('N'), kIdNewBank);
