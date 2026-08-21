@@ -1,6 +1,7 @@
 #include "MainFrame.h"
 #include "PianoWindow.h"
 #include "SettingsDialog.h"
+#include "ClockPicker.h"
 #include "../audio/WaveExport.h"
 #include "../core/VtxDecoder.h"
 #include "dr_wav.h"
@@ -77,7 +78,6 @@ enum : int {
     kIdApplyName,
     kIdPlayEffect,
     kIdStopEffect,
-    kIdAudioSettings,
     kIdExportWave,
     kIdExportCsv,
     kIdExportVt2,
@@ -217,69 +217,6 @@ int ReclockFitOctaveShift(double period, int maxValue) {
     return std::clamp(static_cast<int>(std::llround(period)), 0, maxValue);
 }
 
-struct MachinePreset { const char* label; int clockHz; };
-static const MachinePreset kMachinePresets[] = {
-    {"ZX Spectrum", kAYClockRateSpectrum},
-    {"MSX", kAYClockRateMsx},
-    {"Amstrad CPC", kAYClockRateCpc},
-    {"Atari ST", kAYClockRateAtariSt},
-};
-constexpr int kMachinePresetCount = static_cast<int>(std::size(kMachinePresets));
-
-// Used by the status bar summary: the preset name for a clock value, or
-// "Custom" if it doesn't match one of the known machine presets exactly.
-const char* MachineNameForClock(int clockHz) {
-    for (const auto& p : kMachinePresets) {
-        if (p.clockHz == clockHz) return p.label;
-    }
-    return "Custom";
-}
-
-// Preset + numeric-Hz widget pair shared between Audio Settings' "Machine"
-// picker and the reclock tool's source/destination pickers. Picking a
-// preset fills in the spin control; hand-editing the spin control (to a
-// value not matching any preset) switches the choice to "Custom".
-struct ClockPicker {
-    wxChoice* machineChoice;
-    wxSpinCtrl* clockSpin;
-};
-
-ClockPicker CreateClockPicker(wxWindow* parent, int initialHz) {
-    const auto& kPresets = kMachinePresets;
-    const int kPresetCount = kMachinePresetCount;
-
-    auto* machineChoice = new wxChoice(parent, wxID_ANY);
-    for (const auto& p : kPresets) machineChoice->Append(p.label);
-    machineChoice->Append("Custom");
-
-    auto* clockSpin = new wxSpinCtrl(parent, wxID_ANY, wxEmptyString,
-                                     wxDefaultPosition, wxDefaultSize,
-                                     wxSP_ARROW_KEYS, 100000, 20000000, initialHz);
-
-    int initialSel = kPresetCount;  // Custom
-    for (int i = 0; i < kPresetCount; ++i) {
-        if (kPresets[i].clockHz == initialHz) { initialSel = i; break; }
-    }
-    machineChoice->SetSelection(initialSel);
-
-    machineChoice->Bind(wxEVT_CHOICE, [=](wxCommandEvent&) {
-        const int sel = machineChoice->GetSelection();
-        if (sel >= 0 && sel < kPresetCount) {
-            clockSpin->SetValue(kPresets[sel].clockHz);
-        }
-    });
-    clockSpin->Bind(wxEVT_SPINCTRL, [=](wxSpinEvent&) {
-        const int v = clockSpin->GetValue();
-        int sel = kPresetCount;  // Custom
-        for (int i = 0; i < kPresetCount; ++i) {
-            if (kPresets[i].clockHz == v) { sel = i; break; }
-        }
-        machineChoice->SetSelection(sel);
-    });
-
-    return {machineChoice, clockSpin};
-}
-
 void ReclockEffect(AyfxEffect& effect, int srcClockHz, int dstClockHz, ReclockStrategy strategy) {
     if (srcClockHz <= 0 || dstClockHz <= 0 || srcClockHz == dstClockHz) {
         return;
@@ -306,6 +243,34 @@ void ReclockEffect(AyfxEffect& effect, int srcClockHz, int dstClockHz, ReclockSt
             cell.noise = static_cast<std::uint8_t>(ReclockFitClamp(newNoise, 31));
         }
     }
+}
+
+// outputDevice is persisted as the device *name* (device IDs aren't
+// guaranteed stable across reboots/replugs, names usually are for a given
+// physical device) -- resolved back to the ma_device_id AudioConfig
+// actually needs by matching against a fresh enumeration here. Falls back
+// to the default device if the named one isn't present any more
+// (unplugged, renamed, etc.) rather than failing to init.
+AudioConfig BuildAudioConfig(const Settings& s) {
+    AudioConfig cfg;
+    cfg.sampleRate = s.sampleRate;
+    cfg.volume = s.volume;
+    cfg.chipType = s.chipType == "ym2149" ? AyChipType::Ym2149 : AyChipType::Ay38910;
+    cfg.clockHz = s.clockHz;
+    cfg.lowpassHz = s.lowpassHz;
+
+    cfg.useDefaultDevice = s.outputDevice.empty();
+    if (!cfg.useDefaultDevice) {
+        cfg.useDefaultDevice = true;  // pending a match below
+        for (const auto& d : AudioEngine::enumerateDevices()) {
+            if (d.name == s.outputDevice) {
+                cfg.deviceId = d.id;
+                cfg.useDefaultDevice = false;
+                break;
+            }
+        }
+    }
+    return cfg;
 }
 
 struct EditorLayout {
@@ -605,7 +570,7 @@ MainFrame::MainFrame()
     const wxSize minSize = wxWindow::FromDIP(wxSize(640, 320), this);
     SetSize(baseSize);
     SetMinSize(minSize);
-    audioEngine_.initialize();
+    audioEngine_.initialize(BuildAudioConfig(settings_));
     createMenu();
     CreateStatusBar(2);
     const int audioFieldWidth = FromDIP(280);
@@ -707,7 +672,6 @@ void MainFrame::createMenu() {
     toolsMenu->Append(kIdReclockEffect, "Reclock...");
 
     auto* helpMenu = new wxMenu();
-    helpMenu->Append(kIdAudioSettings, "Audio settings...");
     helpMenu->AppendSeparator();
     helpMenu->Append(wxID_ABOUT, "About");
 
@@ -792,115 +756,6 @@ void MainFrame::createMenu() {
 
     Bind(wxEVT_MENU,
          [this](wxCommandEvent&) {
-             // Enumerate devices
-             const auto devNames = AudioEngine::enumerateDevices();
-             const AudioConfig& cur = audioEngine_.config();
-
-             wxDialog dlg(this, wxID_ANY, "Audio settings",
-                          wxDefaultPosition, wxDefaultSize,
-                          wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
-             auto* vs = new wxBoxSizer(wxVERTICAL);
-
-             // Output device
-             auto* devLabel = new wxStaticText(&dlg, wxID_ANY, "Output device:");
-             auto* devChoice = new wxChoice(&dlg, wxID_ANY);
-             devChoice->Append("Default");
-             for (const auto& n : devNames) devChoice->Append(n);
-             devChoice->SetSelection(0);
-
-             // Sample rate
-             auto* rateLabel = new wxStaticText(&dlg, wxID_ANY, "Sample rate:");
-             auto* rateChoice = new wxChoice(&dlg, wxID_ANY);
-             const int kRates[] = {22050, 44100, 48000, 96000};
-             int selRate = 0;
-             for (int i = 0; i < 4; ++i) {
-                 rateChoice->Append(wxString::Format("%d Hz", kRates[i]));
-                 if (kRates[i] == cur.sampleRate) selRate = i;
-             }
-             rateChoice->SetSelection(selRate);
-
-             // Volume
-             auto* volLabel  = new wxStaticText(&dlg, wxID_ANY, "Volume:");
-             auto* volSlider = new wxSlider(&dlg, wxID_ANY, cur.volume, 0, 100,
-                                            wxDefaultPosition, wxDefaultSize,
-                                            wxSL_HORIZONTAL | wxSL_LABELS);
-
-             // Chip type: same 4-bit (16-level) per-channel volume register on
-             // both, but AY-3-8910's envelope generator has 16 steps vs
-             // YM2149's 32 (see Ay_Apu::build_env_modes_()) plus a different
-             // per-channel DAC table. Independent of clock rate below --
-             // e.g. MSX machines run at the same clock whether they have a
-             // genuine AY-3-8910 or a YM2149 installed.
-             auto* chipLabel  = new wxStaticText(&dlg, wxID_ANY, "Chip:");
-             auto* chipChoice = new wxChoice(&dlg, wxID_ANY);
-             chipChoice->Append("AY-3-8910");
-             chipChoice->Append("YM2149");
-             chipChoice->SetSelection(cur.chipType == AyChipType::Ym2149 ? 1 : 0);
-
-             // Machine presets just fill in the clock field below; picking
-             // "Custom" (or hand-editing the clock) leaves it to the user.
-             auto* machineLabel = new wxStaticText(&dlg, wxID_ANY, "Machine:");
-             auto clockPicker = CreateClockPicker(&dlg, cur.clockHz);
-             auto* machineChoice = clockPicker.machineChoice;
-             auto* clockSpin = clockPicker.clockSpin;
-             auto* clockLabel = new wxStaticText(&dlg, wxID_ANY, "Clock (Hz):");
-
-             // Extra low-pass, on top of whatever the output rate's own
-             // Nyquist already implies -- e.g. to approximate a real
-             // machine's analog output stage rolling off high frequencies.
-             // Off (0) by default: the resampler's own Nyquist-based cutoff
-             // already removes anything truly ultrasonic.
-             auto* lowpassCheck = new wxCheckBox(&dlg, wxID_ANY, "Extra low-pass filter:");
-             lowpassCheck->SetValue(cur.lowpassHz > 0);
-             auto* lowpassSpin = new wxSpinCtrl(&dlg, wxID_ANY, wxEmptyString,
-                                                wxDefaultPosition, wxDefaultSize,
-                                                wxSP_ARROW_KEYS, 1000, 40000,
-                                                cur.lowpassHz > 0 ? cur.lowpassHz : 18000);
-             lowpassSpin->Enable(lowpassCheck->GetValue());
-             lowpassCheck->Bind(wxEVT_CHECKBOX, [=](wxCommandEvent&) {
-                 lowpassSpin->Enable(lowpassCheck->GetValue());
-             });
-
-             auto* grid = new wxFlexGridSizer(7, 2, 6, 10);
-             grid->AddGrowableCol(1, 1);
-             grid->Add(devLabel,  0, wxALIGN_CENTER_VERTICAL);
-             grid->Add(devChoice, 1, wxEXPAND);
-             grid->Add(rateLabel, 0, wxALIGN_CENTER_VERTICAL);
-             grid->Add(rateChoice,1, wxEXPAND);
-             grid->Add(volLabel,  0, wxALIGN_CENTER_VERTICAL);
-             grid->Add(volSlider, 1, wxEXPAND);
-             grid->Add(chipLabel, 0, wxALIGN_CENTER_VERTICAL);
-             grid->Add(chipChoice,1, wxEXPAND);
-             grid->Add(machineLabel, 0, wxALIGN_CENTER_VERTICAL);
-             grid->Add(machineChoice, 1, wxEXPAND);
-             grid->Add(clockLabel, 0, wxALIGN_CENTER_VERTICAL);
-             grid->Add(clockSpin, 1, wxEXPAND);
-             grid->Add(lowpassCheck, 0, wxALIGN_CENTER_VERTICAL);
-             grid->Add(lowpassSpin, 1, wxEXPAND);
-
-             vs->Add(grid, 1, wxEXPAND | wxALL, 12);
-             vs->Add(dlg.CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0,
-                     wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 12);
-             dlg.SetSizerAndFit(vs);
-             dlg.SetMinSize(dlg.FromDIP(wxSize(340, -1)));
-
-             if (dlg.ShowModal() != wxID_OK) return;
-
-             AudioConfig cfg = cur;
-             cfg.sampleRate = kRates[rateChoice->GetSelection()];
-             cfg.volume     = volSlider->GetValue();
-             cfg.chipType   = chipChoice->GetSelection() == 1 ? AyChipType::Ym2149 : AyChipType::Ay38910;
-             cfg.clockHz    = clockSpin->GetValue();
-             cfg.lowpassHz  = lowpassCheck->GetValue() ? lowpassSpin->GetValue() : 0;
-             // Device: selection 0 = default
-             cfg.useDefaultDevice = true;
-             audioEngine_.reconfigure(cfg);
-             updateAudioStatus();
-         },
-         kIdAudioSettings);
-
-    Bind(wxEVT_MENU,
-         [this](wxCommandEvent&) {
              wxMessageBox("AY Sound FX Editor wx port (work in progress)", "About", wxOK | wxICON_INFORMATION, this);
          },
          wxID_ABOUT);
@@ -913,6 +768,8 @@ void MainFrame::createMenu() {
              if (dlg.ShowModal() == wxID_OK) {
                  settings_ = dlg.result();
                  SaveSettings(settings_);
+                 audioEngine_.reconfigure(BuildAudioConfig(settings_));
+                 updateAudioStatus();
              }
          },
          wxID_PREFERENCES);

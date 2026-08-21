@@ -25,6 +25,14 @@ static constexpr int kAYClockRateAtariSt  = 2000000;    // Atari ST (YM2149)
 
 enum class AyChipType { Ay38910, Ym2149 };
 
+// Device names alone aren't enough to actually select a non-default output
+// device (miniaudio needs the opaque ma_device_id); enumerateDevices()
+// returns both so a name picked in the UI can be resolved back to an ID.
+struct AudioDeviceInfo {
+    std::string name;
+    ma_device_id id;
+};
+
 struct AudioConfig {
     bool         useDefaultDevice = true;
     ma_device_id deviceId{};       // valid only when useDefaultDevice == false
@@ -51,8 +59,17 @@ public:
     void shutdown();
     void reconfigure(const AudioConfig& cfg);
 
-    // Returns list of available audio output device names.
-    static std::vector<std::string> enumerateDevices();
+    // Returns the available audio output devices (name + ID).
+    static std::vector<AudioDeviceInfo> enumerateDevices();
+
+    // The sample rates (Hz) the given device actually supports, out of
+    // ayfxedit-wx's own offered rates (22050/44100/48000/96000) --
+    // devices, particularly under WASAPI on Windows, often only support
+    // one native rate or a small set (CoreAudio-based ones are typically
+    // fully flexible instead, resampling internally). Pass nullptr for the
+    // default device. If querying fails or the device reports no
+    // constraint, all of ayfxedit-wx's offered rates are returned.
+    static std::vector<int> supportedSampleRates(const ma_device_id* deviceId);
 
     struct FrameData {
         uint16_t tone;

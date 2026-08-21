@@ -2,6 +2,9 @@
 
 #include <wx/dialog.h>
 
+#include <vector>
+
+#include "../audio/AudioEngine.h"
 #include "../core/Settings.h"
 
 // Preferences window: General / Appearance / Audio (Engine, Output device),
@@ -18,10 +21,35 @@ public:
 
 private:
     wxWindow* createGeneralPage(wxWindow* parent);
+    wxWindow* createEnginePage(wxWindow* parent);
+    wxWindow* createOutputDevicePage(wxWindow* parent);
     void onOK(wxCommandEvent& event);
+
+    // Repopulates sampleRateChoice_ with the rates the currently selected
+    // device actually supports, preferring (in order) the rate previously
+    // selected, else 48000, else 44100, else whatever is first available.
+    void refreshSampleRatesForSelectedDevice();
 
     Settings settings_;
 
+    // General
     class wxCheckBox* singleInstanceCheck_ = nullptr;
     class wxCheckBox* confirmDeleteCheck_ = nullptr;
+
+    // Audio > Engine
+    class wxChoice* chipChoice_ = nullptr;
+    class wxChoice* machineChoice_ = nullptr;
+    class wxSpinCtrl* clockSpin_ = nullptr;
+    class wxCheckBox* lowpassCheck_ = nullptr;
+    class wxSpinCtrl* lowpassSpin_ = nullptr;
+
+    // Audio > Output device
+    class wxChoice* deviceChoice_ = nullptr;
+    class wxChoice* sampleRateChoice_ = nullptr;
+    class wxSlider* volumeSlider_ = nullptr;
+    std::vector<AudioDeviceInfo> devices_;
+    // Rates currently populated in sampleRateChoice_, in display order --
+    // its selection index is only meaningful against this list, since it's
+    // filtered down to what the selected device actually supports.
+    std::vector<int> currentSampleRates_;
 };

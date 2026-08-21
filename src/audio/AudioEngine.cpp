@@ -148,8 +148,8 @@ void AudioEngine::reconfigure(const AudioConfig& cfg) {
     initialize(cfg);
 }
 
-std::vector<std::string> AudioEngine::enumerateDevices() {
-    std::vector<std::string> result;
+std::vector<AudioDeviceInfo> AudioEngine::enumerateDevices() {
+    std::vector<AudioDeviceInfo> result;
 
     ma_context context;
     if (ma_context_init(nullptr, 0, nullptr, &context) != MA_SUCCESS) return result;
@@ -158,12 +158,38 @@ std::vector<std::string> AudioEngine::enumerateDevices() {
     ma_uint32       playbackCount;
     if (ma_context_get_devices(&context, &playbackInfos, &playbackCount, nullptr, nullptr) == MA_SUCCESS) {
         for (ma_uint32 i = 0; i < playbackCount; ++i) {
-            result.push_back(playbackInfos[i].name);
+            result.push_back({playbackInfos[i].name, playbackInfos[i].id});
         }
     }
 
     ma_context_uninit(&context);
     return result;
+}
+
+std::vector<int> AudioEngine::supportedSampleRates(const ma_device_id* deviceId) {
+    static constexpr int kOfferedRates[] = {22050, 44100, 48000, 96000};
+    std::vector<int> all(std::begin(kOfferedRates), std::end(kOfferedRates));
+
+    ma_context context;
+    if (ma_context_init(nullptr, 0, nullptr, &context) != MA_SUCCESS) return all;
+
+    ma_device_info info;
+    const ma_result result = ma_context_get_device_info(&context, ma_device_type_playback, deviceId, &info);
+    ma_context_uninit(&context);
+    if (result != MA_SUCCESS || info.nativeDataFormatCount == 0) return all;
+
+    std::vector<int> supported;
+    for (ma_uint32 i = 0; i < info.nativeDataFormatCount; ++i) {
+        const ma_uint32 rate = info.nativeDataFormats[i].sampleRate;
+        if (rate == 0) return all;  // 0 = "any rate supported" (common for flexible backends, e.g. CoreAudio)
+        for (int offered : kOfferedRates) {
+            if (static_cast<ma_uint32>(offered) == rate &&
+                std::find(supported.begin(), supported.end(), offered) == supported.end()) {
+                supported.push_back(offered);
+            }
+        }
+    }
+    return supported.empty() ? all : supported;
 }
 
 void AudioEngine::renderFrames(const std::vector<FrameData>& frames) {

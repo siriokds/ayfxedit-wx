@@ -45,6 +45,8 @@ add_executable(ayfxedit_wx WIN32
     app/PianoWindow.h
     app/SettingsDialog.cpp
     app/SettingsDialog.h
+    app/ClockPicker.cpp
+    app/ClockPicker.h
     core/BankModel.h
     core/BankModel.cpp
     core/VtxDecoder.h
