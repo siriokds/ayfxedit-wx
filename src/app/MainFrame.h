@@ -1,6 +1,7 @@
 #pragma once
 
 #include <wx/frame.h>
+#include <wx/font.h>
 
 #include <filesystem>
 
@@ -53,6 +54,11 @@ private:
     void onKeyDown(class wxKeyEvent& event);
     void onSysColourChanged(class wxSysColourChangedEvent& event);
 
+    // Applies theme/font settings immediately -- called both at startup and
+    // as a live preview while the Preferences dialog's Appearance page is
+    // being edited (see SettingsDialog's onLiveAppearanceChange callback).
+    void applyAppearanceSettings(const Settings& s);
+
     void onEditCopy(wxCommandEvent& event);
     void onEditCut(wxCommandEvent& event);
     void onEditPaste(wxCommandEvent& event);
@@ -99,9 +105,18 @@ private:
     BankModel bank_;
     AudioEngine audioEngine_;
     Settings settings_;
+    // Captured before any Appearance override is applied, so "System
+    // default" can be restored exactly (rather than guessing at wx's own
+    // default UI font).
+    wxFont defaultUiFont_;
     std::size_t currentEffect_ = 0;
     std::size_t currentOffset_ = 0;
     std::size_t currentY_ = 0;
+    // Running remainder of unconsumed wheel rotation (see onEditorMouseWheel)
+    // -- a trackpad's two-finger scroll sends many more, finer-grained
+    // wheel events per gesture than a physical mouse wheel notch, so acting
+    // on every event's fixed step made it feel far too fast there.
+    int wheelAccum_ = 0;
     int currentX_ = 0;
     bool mouseHold_ = false;
     int lastMouseX_ = -1;

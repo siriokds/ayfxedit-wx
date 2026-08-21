@@ -47,6 +47,22 @@
 
 namespace {
 
+// Appearance overrides from Settings, applied by MainFrame::applyAppearanceSettings().
+// These live here (rather than as MainFrame members) because the font/palette
+// helpers below (EditorPalette::current, MakeEditorFont, EditorPointSize,
+// EditorLineHeight) are free functions called from drawEditor() on every
+// paint, not MainFrame methods.
+//
+// No theme override here: wxWidgets 3.3's SetAppearance() only takes effect
+// if called before any window is created, so a forced Light/Dark can't be
+// switched live at runtime -- EditorPalette::current() always follows the
+// OS appearance instead (see below).
+std::string g_monoFontFamily;
+int g_monoFontPointSize = 0;   // 0 = built-in default (14)
+int g_rowPaddingPx = 0;        // extra vertical row padding, derived from the mono font size
+std::string g_uiFontFamily;
+int g_uiFontPointSize = 0;     // 0 = system default
+
 enum : int {
     kIdNewBank = wxID_HIGHEST + 101,
     kIdLoadBank,
@@ -357,6 +373,12 @@ BarLayout ComputeBarLayout(const wxWindow* w) {
 }
 
 wxFont MakeEditorFont(int pointSize, bool bold = false) {
+    // A user-picked monospace face (Settings > Appearance) takes priority
+    // over the platform-native chain below, when set and actually installed.
+    if (!g_monoFontFamily.empty() && wxFontEnumerator::IsValidFacename(g_monoFontFamily)) {
+        return wxFontInfo(pointSize).Family(wxFONTFAMILY_TELETYPE).FaceName(g_monoFontFamily).Bold(bold);
+    }
+
     // Platform-native monospace chain: light/regular weight preferred.
     // Windows: Consolas; macOS: Menlo; Linux: DejaVu Sans Mono / Liberation Mono.
     //
@@ -382,11 +404,11 @@ wxFont MakeEditorFont(int pointSize, bool bold = false) {
 }
 
 int EditorPointSize() {
-    return 14;
+    return g_monoFontPointSize > 0 ? g_monoFontPointSize : 14;
 }
 
 int EditorHeaderPointSize() {
-    return 12;
+    return std::max(8, EditorPointSize() - 2);
 }
 
 int EditorLineHeight(const wxWindow* w) {
@@ -398,8 +420,10 @@ int EditorLineHeight(const wxWindow* w) {
     wxCoord textW = 0;
     wxCoord textH = 0;
     w->GetTextExtent("0", &textW, &textH, nullptr, nullptr, &font);
-    // +1 for the 1px bottom separator; no extra vertical padding.
-    return textH + 1;
+    // +1 for the 1px bottom separator, plus g_rowPaddingPx (derived from the
+    // mono font's own size -- see MainFrame::applyAppearanceSettings) so
+    // larger fonts get proportionally more breathing room between rows.
+    return textH + g_rowPaddingPx + 1;
 }
 
 int EditorTextHitWidth(const wxWindow* w, const wxString& sample, int minWidth) {
@@ -475,6 +499,9 @@ struct EditorPalette {
 
     // Picks light() or dark() to match the current system/app appearance
     // (wxWidgets 3.3's native dark mode support — see wxSystemAppearance).
+    // No forced-theme override: wxWidgets 3.3's SetAppearance() only takes
+    // effect if called before any window is created, so it can't be
+    // switched live from a Preferences dialog without a restart.
     static const EditorPalette& current() {
         return wxSystemSettings::GetAppearance().IsDark() ? dark() : light();
     }
@@ -561,11 +588,22 @@ wxBitmap MakePianoBitmap(const wxWindow* w) {
     return bmp;
 }
 
+// Recursively applies a font to a window and all its descendants -- unlike
+// SetFont on a single control, wx doesn't propagate a font change to
+// already-created children on its own.
+void ApplyFontRecursively(wxWindow* w, const wxFont& font) {
+    w->SetFont(font);
+    for (wxWindow* child : w->GetChildren()) {
+        ApplyFontRecursively(child, font);
+    }
+}
+
 }  // namespace
 
 MainFrame::MainFrame()
     : wxFrame(nullptr, wxID_ANY, "AY Sound FX Editor v0.6", wxDefaultPosition, wxSize(640, 620)),
-      settings_(LoadSettings()) {
+      settings_(LoadSettings()),
+      defaultUiFont_(GetFont()) {
     const wxSize baseSize = wxWindow::FromDIP(wxSize(640, 620), this);
     const wxSize minSize = wxWindow::FromDIP(wxSize(640, 320), this);
     SetSize(baseSize);
@@ -579,6 +617,40 @@ MainFrame::MainFrame()
     updateAudioStatus();
     createContent();
     refreshView();
+    applyAppearanceSettings(settings_);
+}
+
+void MainFrame::applyAppearanceSettings(const Settings& s) {
+    g_monoFontFamily = s.monoFontFamily;
+    g_monoFontPointSize = s.monoFontSize;
+    // Extra row padding grows only once the mono font exceeds its built-in
+    // default size (14pt) -- at defaults this keeps row height pixel-for-
+    // pixel identical to before Appearance settings existed.
+    g_rowPaddingPx = std::max(0, (EditorPointSize() - 14) / 3);
+
+    const bool uiFontDefault = s.uiFontFamily.empty() && s.uiFontSize <= 0;
+    const wxFont uiFont = uiFontDefault
+        ? defaultUiFont_
+        : wxFontInfo(s.uiFontSize > 0 ? s.uiFontSize : defaultUiFont_.GetPointSize())
+              .FaceName(s.uiFontFamily.empty() ? defaultUiFont_.GetFaceName() : wxString(s.uiFontFamily));
+    ApplyFontRecursively(this, uiFont);
+
+    if (playButton_) {
+        playButton_->SetBitmap(wxBitmapBundle::FromBitmap(MakePlayBitmap(playButton_)));
+    }
+    if (stopButton_) {
+        stopButton_->SetBitmap(wxBitmapBundle::FromBitmap(MakeStopBitmap(stopButton_)));
+    }
+    if (pianoButton_) {
+        pianoButton_->SetBitmap(wxBitmapBundle::FromBitmap(MakePianoBitmap(pianoButton_)));
+    }
+
+    clampView();
+    if (editorPanel_) {
+        editorPanel_->Refresh();
+    }
+    Layout();
+    Refresh();
 }
 
 void MainFrame::updateAudioStatus() {
@@ -764,13 +836,22 @@ void MainFrame::createMenu() {
 
     Bind(wxEVT_MENU,
          [this](wxCommandEvent&) {
-             SettingsDialog dlg(this, settings_);
+             SettingsDialog dlg(this, settings_,
+                                [this](const Settings& live) { applyAppearanceSettings(live); });
              if (dlg.ShowModal() == wxID_OK) {
                  settings_ = dlg.result();
                  SaveSettings(settings_);
                  audioEngine_.reconfigure(BuildAudioConfig(settings_));
                  updateAudioStatus();
+                 // Applied synchronously here rather than relying on the
+                 // dialog's own deferred (CallAfter) live-preview call for
+                 // this final state -- that call can be silently dropped if
+                 // it was still pending when the dialog's window got
+                 // destroyed right after ShowModal() returned.
+                 applyAppearanceSettings(settings_);
              }
+             // On Cancel, the dialog's own onCancel/onClose already reverted
+             // the live preview back to settings_ before ShowModal() returned.
          },
          wxID_PREFERENCES);
 
@@ -1904,16 +1985,35 @@ void MainFrame::onEditorMouseUp(wxMouseEvent& event) {
 }
 
 void MainFrame::onEditorMouseWheel(wxMouseEvent& event) {
-    if (event.GetWheelRotation() < 0) {
+    // A physical mouse wheel reports one notch as a full GetWheelDelta()
+    // (typically 120); a trackpad's two-finger scroll instead sends many
+    // more events per gesture, each with a much smaller rotation. Scaling
+    // the row step by rotation/delta (with a carried remainder, so no
+    // sub-notch trackpad motion is lost) makes both feel proportional to
+    // the actual gesture instead of trackpad scrolling always hitting the
+    // full per-notch step on every event.
+    const int delta = event.GetWheelDelta();
+    if (delta <= 0) {
+        return;
+    }
+    wheelAccum_ += event.GetWheelRotation();
+    const int notches = wheelAccum_ / delta;
+    wheelAccum_ -= notches * delta;
+    if (notches == 0) {
+        return;
+    }
+    const auto step = static_cast<std::size_t>(std::abs(notches)) * 5;
+
+    if (notches < 0) {
         if (currentY_ + 1 < BankModel::kMaxFrames) {
-            currentY_ = std::min(currentY_ + static_cast<std::size_t>(5), BankModel::kMaxFrames - 1);
+            currentY_ = std::min(currentY_ + step, BankModel::kMaxFrames - 1);
             const auto visible = static_cast<std::size_t>(lineOnScreen());
             if (currentY_ >= currentOffset_ + visible) {
                 currentOffset_ = currentY_ - visible + 1;
             }
         }
     } else if (currentY_ > 0) {
-        currentY_ = (currentY_ > 5) ? currentY_ - 5 : 0;
+        currentY_ = (currentY_ > step) ? currentY_ - step : 0;
         if (currentY_ < currentOffset_) {
             currentOffset_ = currentY_;
         }

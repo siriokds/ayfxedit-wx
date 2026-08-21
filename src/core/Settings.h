@@ -8,8 +8,6 @@
 // in-memory state the audio engine actually runs with -- Settings is what
 // gets loaded at startup and saved back, AudioConfig is populated from it.
 struct Settings {
-    enum class Theme { FollowOS, Light, Dark };
-
     // General
     // Settings are always persisted immediately on OK -- no "save on exit"
     // toggle; unlike Dual (a file manager persisting broader session state
@@ -19,7 +17,10 @@ struct Settings {
     bool confirmDeleteEffect = true;
 
     // Appearance
-    Theme theme = Theme::FollowOS;
+    // No explicit Light/Dark override: wxWidgets 3.3's SetAppearance() only
+    // takes effect if called before any window is created, so it can't be
+    // switched live from Preferences without a restart -- not worth the
+    // restart-required UX for a "force theme" feature. Always follows the OS.
     std::string uiFontFamily;    // empty = system default
     int uiFontSize = 0;          // 0 = system default
     std::string monoFontFamily;  // empty = built-in fallback list

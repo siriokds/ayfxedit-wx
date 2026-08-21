@@ -44,7 +44,8 @@ The single application window. Contains:
 - A lazily-created `PianoWindow* pianoWindow_` (shown/hidden, never destroyed until `MainFrame` closes)
 - All custom canvas rendering (`drawEditor`)
 - Mouse handling (`mouseEditAt`) and keyboard handling (`wxEVT_CHAR_HOOK`)
-- All dialogs (Audio Settings, About, etc.)
+- A `Settings settings_` member, loaded once at construction (`LoadSettings()`)
+- All dialogs (Preferences, About, etc.)
 
 There is no separate controller: UI logic and editing/navigation logic both live in `MainFrame`.
 
@@ -83,6 +84,9 @@ Cycle-accurate AY-3-8910 chip emulator, derived from the Gearcoleco project (GPL
 | `src/app/PianoWindow.h` | 49 | PianoWindow declaration |
 | `src/app/PianoWindow.cpp` | 352 | Piano input window: note tables, keys, note entry |
 | `src/app/app_resources.rc` | 2 | Windows RC: embedded fonts (ID 101, 102) |
+| `src/app/SettingsDialog.h/.cpp` | — | Preferences dialog (General / Appearance / Audio → Engine, Output device) |
+| `src/app/ClockPicker.h/.cpp` | — | Machine preset + clock spinner pair, shared by the Reclock tool and Preferences' Engine page |
+| `src/core/Settings.h/.cpp` | — | Persisted app-wide preferences: hand-written JSON load/save |
 | `src/core/BankModel.h` | 54 | Data structures + BankModel declaration |
 | `src/core/BankModel.cpp` | 326 | File I/O, encode/decode, CRUD |
 | `src/audio/AY8910.h` | 59 | AY8910 declaration |

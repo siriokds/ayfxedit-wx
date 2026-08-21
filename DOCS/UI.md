@@ -20,6 +20,7 @@ Single `wxFrame` (`MainFrame`). Default size: 640×620 DIP, minimum: 640×320 DI
 | Save current effect... | — | Saves current effect as `.afx` file |
 | Multi-load... | — | **Stub** (not implemented) |
 | Multi-save... | — | **Stub** (not implemented) |
+| Preferences... | — | Opens the Preferences dialog (see below). Uses the stock `wxID_PREFERENCES` ID, which wx auto-relocates to the macOS application menu (with the platform ⌘, accelerator) the same way it does for About/Exit; stays under File, after a separator, on Windows/Linux |
 | Exit | — | Quits the application |
 
 ### Edit
@@ -65,7 +66,6 @@ All items are **stubs** (not implemented). Planned formats:
 
 | Item | Action |
 |---|---|
-| Audio settings... | Opens the audio configuration dialog |
 | About | Shows the About dialog |
 
 ---
@@ -188,30 +188,60 @@ Playing a note — by clicking a key or pressing its mapped computer key — wri
 
 ---
 
-## Audio Settings dialog
+## Preferences dialog
 
-Opened from **Help → Audio settings...**
+Opened from **File → Preferences...** (macOS: app menu, ⌘,). `SettingsDialog`, a `wxTreebook` sidebar (General / Appearance / Audio → Engine, Output device), operating on a copy of `Settings` — OK writes it back and persists it (`SaveSettings`, JSON at the per-OS user data dir, see `src/core/Settings.h`/`.cpp`); Cancel discards the copy. Reached from `MainFrame::settings_`, loaded once at startup via `LoadSettings()`.
+
+### General
+
+| Control | Type | Notes |
+|---|---|---|
+| Single instance | `wxCheckBox` | Enforced via `wxSingleInstanceChecker` in `main.cpp`'s `OnInit()` |
+| Confirm delete effect | `wxCheckBox` | Gates the existing confirmation dialog in `onDeleteEffect()` |
+
+### Appearance
+
+| Control | Type | Notes |
+|---|---|---|
+| UI font | `wxComboBox` + `wxSpinCtrl` | Family (all installed faces) + point size; applied app-wide via a recursive `SetFont()` over `MainFrame`'s window tree. "System default" reverts to the font captured at startup (`defaultUiFont_`) |
+| Monospace font | `wxComboBox` + `wxSpinCtrl` | Family (fixed-width faces only) + point size; drives the editor canvas's font (see Fonts below) |
+
+Row height/padding is *not* a separate control — it's derived from the monospace font's own size (`g_rowPaddingPx`, grows only once the font exceeds its 14pt built-in default, so defaults stay pixel-identical to before Appearance settings existed).
+
+Theme (Light/Dark override) was considered and **removed**: wxWidgets 3.3's `wxApp::SetAppearance()` only takes effect if called before any window is created, so it can't be switched live from a running Preferences dialog without an app restart — not worth that UX for this. The app always follows the OS appearance (`wxSystemSettings::GetAppearance()`).
+
+Both font controls apply **live** as they're changed (not just on OK), via a callback into `MainFrame::applyAppearanceSettings()`; Cancel/Escape/the title bar close box revert the preview back to the settings the dialog was opened with.
+
+### Audio → Engine
 
 | Control | Type | Options |
 |---|---|---|
-| Output device | `wxChoice` | All miniaudio playback devices enumerated at open time |
-| Sample rate | `wxChoice` | 22050 Hz, 44100 Hz, 48000 Hz, 96000 Hz |
+| Chip | `wxChoice` | AY-3-8910 / YM2149 |
+| Machine | `wxChoice` + `wxSpinCtrl` | ZX Spectrum / MSX / Amstrad CPC / Atari ST presets (`ClockPicker`, shared with the Reclock tool) or a custom clock |
+| Extra low-pass filter | `wxCheckBox` + `wxSpinCtrl` | Off by default; 1000–40000 Hz, applied on top of the resampler's own Nyquist-based cutoff |
+
+### Audio → Output device
+
+| Control | Type | Options |
+|---|---|---|
+| Output device | `wxChoice` | All miniaudio playback devices enumerated at open time (`AudioEngine::enumerateDevices()`, name + `ma_device_id`) |
+| Sample rate | `wxChoice` | Filtered to what the selected device actually supports (`AudioEngine::supportedSampleRates()`), out of 22050/44100/48000/96000 Hz; re-queried when the device selection changes, preferring the previous rate, else 48000, else 44100, else the first available |
 | Volume | `wxSlider` | 0–100 |
 
-On OK, calls `AudioEngine::reconfigure(cfg)` which shuts down and reinitialises the miniaudio playback device with the new parameters. Settings are **not persisted** between sessions.
+Output device selection is resolved back to a real `ma_device_id` by name match against a fresh enumeration at apply time (`BuildAudioConfig`), falling back to the default device if the persisted name is no longer present. On OK, calls `AudioEngine::reconfigure(cfg)`, which shuts down and reinitialises the miniaudio playback device with the new parameters.
 
 ---
 
 ## Fonts
 
-The editor canvas uses a monospace font resolved via a fallback chain, body text at 14pt / column headers at 12pt:
+The editor canvas's monospace font and point size are user-configurable (Preferences → Appearance → Monospace font, see above). When left at "System default", it falls back to a platform-native chain, body text at 14pt / column headers at 2pt smaller:
 
 ```
 Consolas → Menlo → DejaVu Sans Mono → Liberation Mono → Courier New
 ```
 
-Each candidate is checked with `wxFontEnumerator::IsValidFacename()` — **not** `wxFont::IsOk()`, which on the macOS backend returns true even for a face that doesn't exist (Core Text silently substitutes something else instead of failing), which used to make the chain always "succeed" on Consolas and never reach Menlo there.
+Each candidate is checked with `wxFontEnumerator::IsValidFacename()` — **not** `wxFont::IsOk()`, which on the macOS backend returns true even for a face that doesn't exist (Core Text silently substitutes something else instead of failing), which used to make the chain always "succeed" on Consolas and never reach Menlo there. A user-picked face goes through the same validity check before being used.
 
-On Windows, **UbuntuMono-Regular** and **UbuntuMono-Bold** are loaded at startup from resources embedded in the `.exe` (IDs 101 and 102) via `AddFontMemResourceEx`. These are preferred for the canvas rendering.
+On Windows, **UbuntuMono-Regular** and **UbuntuMono-Bold** are loaded at startup from resources embedded in the `.exe` (IDs 101 and 102) via `AddFontMemResourceEx`. These are preferred for the canvas rendering when no custom face is set.
 
-Toolbar controls (buttons, the effect number/name fields) and the Piano window's controls use the platform's native default GUI font, unmodified — no custom size or face override.
+The toolbar, menus, and other native controls use the app-wide UI font (Preferences → Appearance → UI font) when set, applied via a recursive `SetFont()` over `MainFrame`'s window tree; left at "System default", they use the platform's native default GUI font, unmodified.

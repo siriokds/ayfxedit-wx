@@ -98,4 +98,6 @@ At `volume = 50` this gives `scale = 3`, mapping the 12288 peak to 36864 — wit
 
 ### Device enumeration
 
-`enumerateDevices()` opens a throwaway `ma_context`, calls `ma_context_get_devices()`, and returns a `std::vector<std::string>` of playback device names. Used to populate the device selector in the Audio Settings dialog (selection is not yet wired back to a specific `ma_device_id` — only the default device is currently used for playback).
+`enumerateDevices()` opens a throwaway `ma_context`, calls `ma_context_get_devices()`, and returns a `std::vector<AudioDeviceInfo>` (name + `ma_device_id`) of playback devices. Used to populate the device selector in Preferences → Audio → Output device; the persisted device *name* is resolved back to a real `ma_device_id` by a fresh enumeration at apply time (`BuildAudioConfig` in `MainFrame.cpp`), falling back to the default device if the named one is no longer present.
+
+`supportedSampleRates(deviceId)` queries `ma_context_get_device_info()`'s `nativeDataFormats[]` to filter the Sample rate choice down to what the selected device actually supports (out of 22050/44100/48000/96000 Hz) — some backends (WASAPI in particular) only support a native rate or a small set, while others (CoreAudio) report `sampleRate == 0` meaning "any rate", in which case all four are offered.

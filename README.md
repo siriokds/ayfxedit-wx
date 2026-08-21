@@ -14,6 +14,7 @@ Runs on Windows, Linux, and macOS.
 - **Import**: PSG (AY register dump), VTX (Vortex Tracker's LH5-compressed format), VGM (SN76489 logs, converted to AY), WAV and MP3 (pitch/volume extraction via an AMDF-style tuner)
 - Multi-load/multi-save for whole banks of individual effect files
 - Native dark/light mode and system fonts/colours on macOS (see `DOCS/UI.md`)
+- **Preferences dialog** (File → Preferences...): general options, UI/monospace font family and size, audio engine (chip/clock/low-pass filter), and output device/sample rate/volume — persisted as JSON across sessions
 
 ## Dependencies
 

@@ -27,21 +27,6 @@ std::string JsonEscape(const std::string& s) {
     return out;
 }
 
-std::string ThemeToString(Settings::Theme t) {
-    switch (t) {
-    case Settings::Theme::Light: return "light";
-    case Settings::Theme::Dark: return "dark";
-    case Settings::Theme::FollowOS:
-    default: return "followOS";
-    }
-}
-
-Settings::Theme ThemeFromString(const std::string& s) {
-    if (s == "light") return Settings::Theme::Light;
-    if (s == "dark") return Settings::Theme::Dark;
-    return Settings::Theme::FollowOS;
-}
-
 std::string ToJson(const Settings& s) {
     std::ostringstream out;
     out << "{\n";
@@ -51,7 +36,6 @@ std::string ToJson(const Settings& s) {
     out << "    \"confirmDeleteEffect\": " << (s.confirmDeleteEffect ? "true" : "false") << "\n";
     out << "  },\n";
     out << "  \"appearance\": {\n";
-    out << "    \"theme\": \"" << ThemeToString(s.theme) << "\",\n";
     out << "    \"uiFontFamily\": \"" << JsonEscape(s.uiFontFamily) << "\",\n";
     out << "    \"uiFontSize\": " << s.uiFontSize << ",\n";
     out << "    \"monoFontFamily\": \"" << JsonEscape(s.monoFontFamily) << "\",\n";
@@ -239,7 +223,6 @@ Settings LoadSettings() {
     }
 
     if (const auto* appearance = root.find("appearance")) {
-        if (const auto* v = appearance->find("theme")) s.theme = ThemeFromString(v->asString(""));
         if (const auto* v = appearance->find("uiFontFamily")) s.uiFontFamily = v->asString(s.uiFontFamily);
         if (const auto* v = appearance->find("uiFontSize")) s.uiFontSize = v->asInt(s.uiFontSize);
         if (const auto* v = appearance->find("monoFontFamily")) s.monoFontFamily = v->asString(s.monoFontFamily);
@@ -254,6 +237,13 @@ Settings LoadSettings() {
         if (const auto* v = audio->find("sampleRate")) s.sampleRate = v->asInt(s.sampleRate);
         if (const auto* v = audio->find("volume")) s.volume = v->asInt(s.volume);
         if (const auto* v = audio->find("outputDevice")) s.outputDevice = v->asString(s.outputDevice);
+    }
+
+    // A sampleRate of 0 (or negative) would leave the resampler with no
+    // target rate and produce silent output -- guard against ever loading
+    // one, regardless of how it ended up on disk.
+    if (s.sampleRate <= 0) {
+        s.sampleRate = Settings().sampleRate;
     }
 
     return s;

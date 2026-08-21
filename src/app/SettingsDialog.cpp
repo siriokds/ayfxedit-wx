@@ -3,6 +3,8 @@
 #include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/choice.h>
+#include <wx/combobox.h>
+#include <wx/fontenum.h>
 #include <wx/sizer.h>
 #include <wx/slider.h>
 #include <wx/spinctrl.h>
@@ -15,8 +17,8 @@
 
 namespace {
 
-// Placeholder page content -- filled in as Appearance's real controls are
-// built next.
+// Placeholder page content -- filled in as Audio's own controls are built
+// next (it's just a parent node for the Engine/Output device sub-pages).
 wxPanel* MakeStubPage(wxWindow* parent, const wxString& label) {
     auto* panel = new wxPanel(parent);
     auto* sizer = new wxBoxSizer(wxVERTICAL);
@@ -27,18 +29,36 @@ wxPanel* MakeStubPage(wxWindow* parent, const wxString& label) {
     return panel;
 }
 
+// Facenames for the font family combo boxes. "System default" (empty
+// string) is always first, mapping to Settings' own empty-string == default
+// convention. fixedWidthOnly restricts the list to monospace faces, for the
+// grid's own font -- a proportional face there would break column alignment.
+wxArrayString FontFacenames(bool fixedWidthOnly) {
+    wxArrayString names;
+    names.Add("System default");
+    wxArrayString found = wxFontEnumerator::GetFacenames(wxFONTENCODING_SYSTEM, fixedWidthOnly);
+    found.Sort();
+    for (const auto& name : found) names.Add(name);
+    return names;
+}
+
 }  // namespace
 
-SettingsDialog::SettingsDialog(wxWindow* parent, const Settings& initial)
+SettingsDialog::SettingsDialog(wxWindow* parent, const Settings& initial,
+                               std::function<void(const Settings&)> onLiveAppearanceChange)
     : wxDialog(parent, wxID_ANY, "Preferences", wxDefaultPosition, wxDefaultSize,
                wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER),
-      settings_(initial) {
+      settings_(initial),
+      initial_(initial),
+      onLiveAppearanceChange_(std::move(onLiveAppearanceChange)) {
     auto* book = new wxTreebook(this, wxID_ANY);
     book->AddPage(createGeneralPage(book), "General");
-    book->AddPage(MakeStubPage(book, "Appearance (stub)"), "Appearance");
+    book->AddPage(createAppearancePage(book), "Appearance");
+    const int audioPageIndex = book->GetPageCount();
     book->AddPage(MakeStubPage(book, "Audio"), "Audio");
     book->AddSubPage(createEnginePage(book), "Engine");
     book->AddSubPage(createOutputDevicePage(book), "Output device");
+    book->ExpandNode(audioPageIndex, true);
 
     // Wide enough for the sidebar's longest label ("Output device") without
     // ellipsis; tall enough that all 5 rows (General/Appearance/Audio/
@@ -56,6 +76,8 @@ SettingsDialog::SettingsDialog(wxWindow* parent, const Settings& initial)
     CentreOnScreen();
 
     Bind(wxEVT_BUTTON, &SettingsDialog::onOK, this, wxID_OK);
+    Bind(wxEVT_BUTTON, &SettingsDialog::onCancel, this, wxID_CANCEL);
+    Bind(wxEVT_CLOSE_WINDOW, &SettingsDialog::onClose, this);
 }
 
 wxWindow* SettingsDialog::createGeneralPage(wxWindow* parent) {
@@ -72,6 +94,63 @@ wxWindow* SettingsDialog::createGeneralPage(wxWindow* parent) {
     sizer->Add(singleInstanceCheck_, 0, wxALL, 8);
     sizer->Add(confirmDeleteCheck_, 0, wxLEFT | wxRIGHT | wxBOTTOM, 8);
     panel->SetSizer(sizer);
+    return panel;
+}
+
+wxWindow* SettingsDialog::createAppearancePage(wxWindow* parent) {
+    auto* panel = new wxPanel(parent);
+
+    // No Theme choice here: wxWidgets 3.3's SetAppearance() only takes
+    // effect if called before any window is created, so a forced Light/Dark
+    // override can't be switched live from this dialog without a restart --
+    // not worth the restart-required UX. Always follows the OS.
+
+    // UI font and monospace/grid font each get their own family + size --
+    // vision-impaired users and anyone on an external/large monitor need to
+    // scale these independently of each other (the grid's own row height
+    // and column width derive from the monospace font's metrics, see
+    // MainFrame's EditorLineHeight()).
+    auto* uiFontLabel = new wxStaticText(panel, wxID_ANY, "UI font:");
+    uiFontCombo_ = new wxComboBox(panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+                                  FontFacenames(/*fixedWidthOnly=*/false));
+    uiFontCombo_->SetValue(settings_.uiFontFamily.empty() ? "System default" : settings_.uiFontFamily);
+    uiFontSizeSpin_ = new wxSpinCtrl(panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+                                     wxSP_ARROW_KEYS, 6, 72,
+                                     settings_.uiFontSize > 0 ? settings_.uiFontSize : GetFont().GetPointSize());
+
+    auto* monoFontLabel = new wxStaticText(panel, wxID_ANY, "Monospace font:");
+    monoFontCombo_ = new wxComboBox(panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+                                    FontFacenames(/*fixedWidthOnly=*/true));
+    monoFontCombo_->SetValue(settings_.monoFontFamily.empty() ? "System default" : settings_.monoFontFamily);
+    monoFontSizeSpin_ = new wxSpinCtrl(panel, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+                                       wxSP_ARROW_KEYS, 6, 72,
+                                       settings_.monoFontSize > 0 ? settings_.monoFontSize : 14);
+
+    auto* grid = new wxFlexGridSizer(2, 3, 6, 10);
+    grid->AddGrowableCol(1, 1);
+    grid->Add(uiFontLabel, 0, wxALIGN_CENTER_VERTICAL);
+    grid->Add(uiFontCombo_, 1, wxEXPAND);
+    grid->Add(uiFontSizeSpin_, 0, wxEXPAND);
+    grid->Add(monoFontLabel, 0, wxALIGN_CENTER_VERTICAL);
+    grid->Add(monoFontCombo_, 1, wxEXPAND);
+    grid->Add(monoFontSizeSpin_, 0, wxEXPAND);
+
+    auto* sizer = new wxBoxSizer(wxVERTICAL);
+    sizer->Add(grid, 0, wxEXPAND | wxALL, 12);
+    sizer->Add(new wxStaticText(panel, wxID_ANY,
+                                 "Row height and padding follow the monospace font's own size."),
+               0, wxLEFT | wxRIGHT | wxTOP, 12);
+    panel->SetSizer(sizer);
+
+    // Applied live (not just on OK) so the main window previews the change
+    // right away, as it's being picked.
+    uiFontCombo_->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) { applyAppearanceLive(); });
+    uiFontCombo_->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent&) { applyAppearanceLive(); });
+    uiFontSizeSpin_->Bind(wxEVT_SPINCTRL, [this](wxSpinEvent&) { applyAppearanceLive(); });
+    monoFontCombo_->Bind(wxEVT_COMBOBOX, [this](wxCommandEvent&) { applyAppearanceLive(); });
+    monoFontCombo_->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent&) { applyAppearanceLive(); });
+    monoFontSizeSpin_->Bind(wxEVT_SPINCTRL, [this](wxSpinEvent&) { applyAppearanceLive(); });
+
     return panel;
 }
 
@@ -201,9 +280,38 @@ void SettingsDialog::refreshSampleRatesForSelectedDevice() {
     sampleRateChoice_->SetSelection(newSel);
 }
 
+void SettingsDialog::readAppearanceFieldsIntoSettings() {
+    const wxString uiFont = uiFontCombo_->GetValue();
+    settings_.uiFontFamily = uiFont == "System default" ? std::string() : uiFont.ToStdString();
+    settings_.uiFontSize = uiFontSizeSpin_->GetValue();
+    const wxString monoFont = monoFontCombo_->GetValue();
+    settings_.monoFontFamily = monoFont == "System default" ? std::string() : monoFont.ToStdString();
+    settings_.monoFontSize = monoFontSizeSpin_->GetValue();
+}
+
+void SettingsDialog::applyAppearanceLive() {
+    readAppearanceFieldsIntoSettings();
+
+    // Deferred via CallAfter: running the (fairly heavy) live-apply
+    // synchronously inside a wxChoice's own selection handler -- before its
+    // native popup has fully dismissed on macOS -- was making the just-
+    // clicked wxChoice itself briefly restyle with the wrong (light-mode,
+    // effectively invisible-on-dark) text colour. Only used for the live
+    // preview while the dialog stays open -- onOK() applies the final state
+    // synchronously instead (see readAppearanceFieldsIntoSettings there),
+    // since a CallAfter posted right before the dialog closes can be
+    // silently dropped once the window is destroyed before it runs.
+    if (onLiveAppearanceChange_) {
+        const Settings snapshot = settings_;
+        CallAfter([this, snapshot] { onLiveAppearanceChange_(snapshot); });
+    }
+}
+
 void SettingsDialog::onOK(wxCommandEvent& event) {
     settings_.singleInstance = singleInstanceCheck_->GetValue();
     settings_.confirmDeleteEffect = confirmDeleteCheck_->GetValue();
+
+    readAppearanceFieldsIntoSettings();
 
     settings_.chipType = chipChoice_->GetSelection() == 1 ? "ym2149" : "ay38910";
     settings_.clockHz = clockSpin_->GetValue();
@@ -211,8 +319,26 @@ void SettingsDialog::onOK(wxCommandEvent& event) {
 
     const int devSel = deviceChoice_->GetSelection();
     settings_.outputDevice = devSel > 0 ? deviceChoice_->GetString(devSel).ToStdString() : std::string();
-    settings_.sampleRate = currentSampleRates_[static_cast<std::size_t>(sampleRateChoice_->GetSelection())];
+    const int rateSel = sampleRateChoice_->GetSelection();
+    if (rateSel != wxNOT_FOUND && static_cast<std::size_t>(rateSel) < currentSampleRates_.size()) {
+        settings_.sampleRate = currentSampleRates_[static_cast<std::size_t>(rateSel)];
+    }
+    // else: leave settings_.sampleRate untouched rather than indexing out of
+    // bounds -- an empty/unselected sampleRateChoice_ should never happen,
+    // but this avoids ever persisting a garbage or zero rate if it does.
     settings_.volume = volumeSlider_->GetValue();
 
     event.Skip();  // let the default handler EndModal(wxID_OK) and close the dialog
+}
+
+void SettingsDialog::onCancel(wxCommandEvent& event) {
+    if (onLiveAppearanceChange_) onLiveAppearanceChange_(initial_);
+    event.Skip();  // let the default handler EndModal(wxID_CANCEL) and close the dialog
+}
+
+void SettingsDialog::onClose(wxCloseEvent& event) {
+    // Covers the title bar close box / Escape, which don't necessarily go
+    // through onCancel's wxID_CANCEL button event.
+    if (onLiveAppearanceChange_) onLiveAppearanceChange_(initial_);
+    event.Skip();
 }
