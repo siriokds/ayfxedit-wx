@@ -21,3 +21,43 @@ jobs:
 
       - name: Build
         run: cmake --build build --config Release -j4
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # wxWidgets 3.3 has no ready-made Windows package -- vcpkg builds it
+      # from source, which is slow (10-20 min), so its compiled output is
+      # cached across runs. VCPKG_INSTALLATION_ROOT is preinstalled on
+      # windows-latest runners.
+      - name: Point vcpkg's binary cache at a workspace-relative path
+        shell: pwsh
+        run: |
+          $cacheDir = "$env:GITHUB_WORKSPACE\vcpkg-cache"
+          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$cacheDir" >> $env:GITHUB_ENV
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-cache
+          key: vcpkg-windows-wxwidgets-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: |
+            vcpkg-windows-wxwidgets-
+
+      - name: Install wxWidgets via vcpkg
+        shell: pwsh
+        run: vcpkg install wxwidgets:x64-windows
+
+      - name: Configure
+        run: >
+          cmake -S src -B build -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows
+
+      - name: Build
+        run: cmake --build build --config Release -j4
