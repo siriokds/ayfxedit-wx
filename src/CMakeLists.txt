@@ -16,7 +16,7 @@ option(AYFX_USE_LOCAL_WX "Use wxWidgets from support/wxWidgets-3.3.3" ON)
 
 set(wxWidgets_DIR "${AYFX_REPO_ROOT}/.local/wx/lib/cmake/wxWidgets-3.3" CACHE PATH "Path to wxWidgetsConfig.cmake directory")
 
-find_package(wxWidgets CONFIG QUIET COMPONENTS core base)
+find_package(wxWidgets CONFIG QUIET COMPONENTS core base html)
 if(wxWidgets_FOUND)
     set(AYFX_WX_LIBS wxWidgets::wxWidgets)
 else()
@@ -24,7 +24,7 @@ else()
         set(wxWidgets_ROOT_DIR "${CMAKE_SOURCE_DIR}/../support/wxWidgets-3.3.3")
     endif()
 
-    find_package(wxWidgets REQUIRED COMPONENTS core base)
+    find_package(wxWidgets REQUIRED COMPONENTS core base html)
     include(${wxWidgets_USE_FILE})
     set(AYFX_WX_LIBS ${wxWidgets_LIBRARIES})
 endif()
@@ -47,6 +47,8 @@ add_executable(ayfxedit_wx WIN32
     app/SettingsDialog.h
     app/ClockPicker.cpp
     app/ClockPicker.h
+    app/WindowGeometry.cpp
+    app/WindowGeometry.h
     core/BankModel.h
     core/BankModel.cpp
     core/VtxDecoder.h

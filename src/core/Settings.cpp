@@ -49,6 +49,14 @@ std::string ToJson(const Settings& s) {
     out << "    \"sampleRate\": " << s.sampleRate << ",\n";
     out << "    \"volume\": " << s.volume << ",\n";
     out << "    \"outputDevice\": \"" << JsonEscape(s.outputDevice) << "\"\n";
+    out << "  },\n";
+    out << "  \"window\": {\n";
+    out << "    \"x\": " << s.windowGeometry.x << ",\n";
+    out << "    \"y\": " << s.windowGeometry.y << ",\n";
+    out << "    \"w\": " << s.windowGeometry.w << ",\n";
+    out << "    \"h\": " << s.windowGeometry.h << ",\n";
+    out << "    \"maximized\": " << (s.windowGeometry.maximized ? "true" : "false") << ",\n";
+    out << "    \"posValid\": " << (s.windowGeometry.posValid ? "true" : "false") << "\n";
     out << "  }\n";
     out << "}\n";
     return out.str();
@@ -237,6 +245,15 @@ Settings LoadSettings() {
         if (const auto* v = audio->find("sampleRate")) s.sampleRate = v->asInt(s.sampleRate);
         if (const auto* v = audio->find("volume")) s.volume = v->asInt(s.volume);
         if (const auto* v = audio->find("outputDevice")) s.outputDevice = v->asString(s.outputDevice);
+    }
+
+    if (const auto* window = root.find("window")) {
+        if (const auto* v = window->find("x")) s.windowGeometry.x = v->asInt(s.windowGeometry.x);
+        if (const auto* v = window->find("y")) s.windowGeometry.y = v->asInt(s.windowGeometry.y);
+        if (const auto* v = window->find("w")) s.windowGeometry.w = v->asInt(s.windowGeometry.w);
+        if (const auto* v = window->find("h")) s.windowGeometry.h = v->asInt(s.windowGeometry.h);
+        if (const auto* v = window->find("maximized")) s.windowGeometry.maximized = v->asBool(s.windowGeometry.maximized);
+        if (const auto* v = window->find("posValid")) s.windowGeometry.posValid = v->asBool(s.windowGeometry.posValid);
     }
 
     // A sampleRate of 0 (or negative) would leave the resampler with no

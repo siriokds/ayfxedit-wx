@@ -4,6 +4,8 @@
 
 Single `wxFrame` (`MainFrame`). Default size: 640×620 DIP, minimum: 640×320 DIP. All sizes use `FromDIP()` throughout for HiDPI correctness.
 
+Position, size, and maximized state are persisted across sessions (`Settings::windowGeometry`, `src/app/WindowGeometry.h/.cpp`) — captured once on close (`MainFrame::onClose`, bound to `wxEVT_CLOSE_WINDOW`) rather than tracked live, and restored at construction, before the window is shown. The restore is clamped to fit whichever connected display best overlaps the saved rect (falling back to the primary display if none do — e.g. a monitor was unplugged since the last session), so the window can never reopen with its title bar unreachable. Ported (simplified) from the same mechanism in the user's other project, Dual.
+
 ---
 
 ## Menu bar
@@ -67,6 +69,16 @@ All items are **stubs** (not implemented). Planned formats:
 | Item | Action |
 |---|---|
 | About | Shows the About dialog |
+
+---
+
+## About dialog
+
+`MainFrame::onAbout`, a custom `wxDialog` (not `wxAboutDialogInfo`) — same pattern as the user's other project, Dual: a fixed header (app name, subtitle, GPLv2 note, copyright), then a scrolling `wxHtmlWindow` with one borderless card per credit (name, licence/author, clickable link), colours pulled from `wxSYS_COLOUR_*` so it follows the native theme. Requires the `html` wxWidgets component (`find_package(wxWidgets ... COMPONENTS core base html)`).
+
+Credits, in order: the original tool (Shiru) and its `ayfxedit-improved` fork (Threetwosevensixseven), then vendored/linked libraries — wxWidgets, game-music-emu (`Ay_Apu`/`Blip_Buffer`, LGPL-2.1), miniaudio (public domain/MIT-0), dr_libs (public domain/MIT-0), lh5/ar002 (public domain, no public repository link).
+
+Centred on screen (`CentreOnScreen()`, not `CentreOnParent()`).
 
 ---
 

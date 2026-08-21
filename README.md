@@ -15,6 +15,7 @@ Runs on Windows, Linux, and macOS.
 - Multi-load/multi-save for whole banks of individual effect files
 - Native dark/light mode and system fonts/colours on macOS (see `DOCS/UI.md`)
 - **Preferences dialog** (File → Preferences...): general options, UI/monospace font family and size, audio engine (chip/clock/low-pass filter), and output device/sample rate/volume — persisted as JSON across sessions
+- Window position/size/maximized state remembered across sessions, with multi-monitor-safe restore (won't reopen off-screen if a monitor was disconnected)
 
 ## Dependencies
 

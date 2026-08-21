@@ -2,6 +2,7 @@
 #include "PianoWindow.h"
 #include "SettingsDialog.h"
 #include "ClockPicker.h"
+#include "WindowGeometry.h"
 #include "../audio/WaveExport.h"
 #include "../core/VtxDecoder.h"
 #include "dr_wav.h"
@@ -34,6 +35,7 @@
 #include <wx/filename.h>
 #include <wx/font.h>
 #include <wx/fontenum.h>
+#include <wx/html/htmlwin.h>
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/panel.h>
@@ -41,9 +43,11 @@
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
+#include <wx/statline.h>
 #include <wx/stdpaths.h>
 #include <wx/textctrl.h>
 #include <wx/tglbtn.h>
+#include <wx/utils.h>
 
 namespace {
 
@@ -618,6 +622,15 @@ MainFrame::MainFrame()
     createContent();
     refreshView();
     applyAppearanceSettings(settings_);
+    RestoreWindowGeometry(*this, settings_.windowGeometry);
+
+    Bind(wxEVT_CLOSE_WINDOW, &MainFrame::onClose, this);
+}
+
+void MainFrame::onClose(wxCloseEvent& event) {
+    CaptureWindowGeometry(*this, settings_.windowGeometry);
+    SaveSettings(settings_);
+    event.Skip();
 }
 
 void MainFrame::applyAppearanceSettings(const Settings& s) {
@@ -826,11 +839,7 @@ void MainFrame::createMenu() {
             },
             kIdNotImplemented);
 
-    Bind(wxEVT_MENU,
-         [this](wxCommandEvent&) {
-             wxMessageBox("AY Sound FX Editor wx port (work in progress)", "About", wxOK | wxICON_INFORMATION, this);
-         },
-         wxID_ABOUT);
+    Bind(wxEVT_MENU, &MainFrame::onAbout, this, wxID_ABOUT);
 
     Bind(wxEVT_MENU, [this](wxCommandEvent&) { Close(true); }, wxID_EXIT);
 
@@ -2021,6 +2030,119 @@ void MainFrame::onEditorMouseWheel(wxMouseEvent& event) {
 
     clampView();
     refreshView();
+}
+
+void MainFrame::onAbout(wxCommandEvent&) {
+    wxDialog dlg(this, wxID_ANY, "About AY Sound FX Editor wx",
+                 wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE);
+
+    const wxColour colBg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+    const wxColour colCard = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+    const wxColour colFg = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+    const wxColour colDim = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+    dlg.SetBackgroundColour(colBg);
+
+    auto* sizer = new wxBoxSizer(wxVERTICAL);
+    const int pad = 16;
+
+    auto* name = new wxStaticText(&dlg, wxID_ANY, "AY Sound FX Editor wx");
+    wxFont nameFont = name->GetFont();
+    nameFont.SetPointSize(nameFont.GetPointSize() + 6);
+    nameFont.SetWeight(wxFONTWEIGHT_BOLD);
+    name->SetFont(nameFont);
+    sizer->Add(name, 0, wxALIGN_CENTER | wxTOP | wxLEFT | wxRIGHT, pad);
+
+    sizer->Add(new wxStaticText(&dlg, wxID_ANY, "Cross-platform port of AY Sound FX Editor v0.6"),
+               0, wxALIGN_CENTER | wxTOP, 4);
+    sizer->Add(new wxStaticText(&dlg, wxID_ANY, "Licensed under the GNU General Public License v2.0"),
+               0, wxALIGN_CENTER | wxTOP, 4);
+
+    auto* copyright = new wxStaticText(&dlg, wxID_ANY, wxString::FromUTF8("\xC2\xA9 2026 Saverio Russo"));
+    copyright->SetForegroundColour(colDim);
+    sizer->Add(copyright, 0, wxALIGN_CENTER | wxTOP, 6);
+
+    sizer->Add(new wxStaticLine(&dlg), 0, wxEXPAND | wxTOP | wxLEFT | wxRIGHT, pad);
+
+    // Credits, rendered as HTML: one borderless card per entry (name, then
+    // licence/author, then a clickable link), grouped by proximity/shared
+    // card background rather than a ruled-off list -- same pattern as the
+    // user's other project, Dual.
+    auto hex = [](const wxColour& c) {
+        return wxString::Format("#%02x%02x%02x", c.Red(), c.Green(), c.Blue());
+    };
+    const wxString cBg = hex(colBg);
+    const wxString cCard = hex(colCard);
+    const wxString cFg = hex(colFg);
+    const wxString cDim = hex(colDim);
+    const wxString cLink = cDim;  // a metadata-grey link, not a saturated blue
+
+    wxString html;
+    html << "<body bgcolor=\"" << cBg << "\" text=\"" << cFg << "\" link=\"" << cLink
+         << "\" vlink=\"" << cLink << "\" alink=\"" << cLink << "\">";
+
+    auto spacer = [&](int px) {
+        html << "<table cellspacing=\"0\" cellpadding=\"0\" border=\"0\">"
+                "<tr><td height=\"" << px << "\"></td></tr></table>";
+    };
+    auto addCard = [&](const wxString& label, const wxString& licence,
+                       const wxString& author, const wxString& url) {
+        html << "<table width=\"100%\" cellspacing=\"0\" cellpadding=\"10\" border=\"0\">"
+                "<tr><td bgcolor=\"" << cCard << "\">"
+                "<font size=\"+1\"><b>" << label << "</b></font><br>"
+                "<font color=\"" << cDim << "\">" << licence << " &nbsp;&middot;&nbsp; " << author
+             << "</font>";
+        if (!url.empty()) {
+            html << "<br><a href=\"" << url << "\">" << url << "</a>";
+        }
+        html << "</td></tr></table>";
+        spacer(10);
+    };
+
+    addCard("AY Sound FX Editor (original tool)", "no formal license stated", "Shiru",
+            "https://shiru.untergrund.net/software.shtml");
+    addCard("ayfxedit-improved (fork)", "no formal license stated", "Threetwosevensixseven",
+            "https://github.com/Threetwosevensixseven/ayfxedit-improved");
+    addCard(wxVERSION_STRING, "wxWindows Library Licence", "wxWidgets Team",
+            "https://www.wxwidgets.org");
+    addCard("game-music-emu (Ay_Apu / Blip_Buffer, vendored)", "LGPL-2.1", "Shay Green (blargg) and contributors",
+            "https://bitbucket.org/mpyne/game-music-emu/");
+    addCard("miniaudio (vendored)", "Public domain / MIT-0", "David Reid",
+            "https://miniaud.io");
+    addCard("dr_libs -- dr_wav, dr_mp3 (vendored)", "Public domain / MIT-0", "David Reid",
+            "https://github.com/mackron/dr_libs");
+    addCard("lh5 / ar002 (vendored, VTX import)", "Public domain", "Haruhiko Okumura", "");
+
+    html << "</body>";
+
+    auto* credits = new wxHtmlWindow(&dlg, wxID_ANY, wxDefaultPosition, FromDIP(wxSize(520, 210)),
+                                     wxHW_SCROLLBAR_AUTO | wxBORDER_NONE);
+    credits->SetHTMLBackgroundColour(colBg);
+    credits->SetStandardFonts(14);
+    credits->SetPage(html);
+    // wxHtmlWindow doesn't open links on its own.
+    credits->Bind(wxEVT_HTML_LINK_CLICKED, [](wxHtmlLinkEvent& ev) {
+        wxLaunchDefaultBrowser(ev.GetLinkInfo().GetHref());
+    });
+
+    auto* creditsLabel = new wxStaticText(&dlg, wxID_ANY, "BUILT WITH OPEN-SOURCE LIBRARIES");
+    wxFont labelFont = creditsLabel->GetFont();
+    labelFont.SetPointSize(std::max(labelFont.GetPointSize() - 1, 10));
+    labelFont.SetWeight(wxFONTWEIGHT_BOLD);
+    creditsLabel->SetFont(labelFont);
+    creditsLabel->SetForegroundColour(colDim);
+    sizer->Add(creditsLabel, 0, wxLEFT | wxRIGHT | wxTOP, pad);
+    sizer->Add(credits, 1, wxEXPAND | wxLEFT | wxRIGHT | wxTOP, 8);
+
+    sizer->Add(new wxStaticLine(&dlg), 0, wxEXPAND | wxTOP | wxLEFT | wxRIGHT, pad);
+
+    auto* okButton = new wxButton(&dlg, wxID_OK, "OK");
+    sizer->Add(okButton, 0, wxALIGN_CENTER | wxALL, pad);
+
+    dlg.SetSizerAndFit(sizer);
+    dlg.SetMinSize(wxSize(dlg.GetSize().x + 60, -1));
+    dlg.Fit();
+    dlg.CentreOnScreen();
+    dlg.ShowModal();
 }
 
 void MainFrame::onSysColourChanged(wxSysColourChangedEvent& event) {

@@ -3,6 +3,18 @@
 #include <filesystem>
 #include <string>
 
+// Plain-data window geometry, persisted across sessions -- captured/restored
+// by the wx-touching code in src/app/WindowGeometry.h/.cpp (kept out of this
+// core/ header so Settings itself stays free of any wx dependency).
+struct WindowGeometry {
+    int x = 0, y = 0, w = 0, h = 0;
+    bool maximized = false;
+    // Distinguishes "no position ever saved" (e.g. upgrading from a version
+    // predating this feature) from a legitimately saved (0, 0) -- without
+    // it, a fresh install would look identical to "saved at the origin".
+    bool posValid = false;
+};
+
 // Persisted app-wide preferences (General/Appearance/Audio settings page).
 // Distinct from AudioConfig (src/audio/AudioEngine.h), which is the live,
 // in-memory state the audio engine actually runs with -- Settings is what
@@ -10,11 +22,15 @@
 struct Settings {
     // General
     // Settings are always persisted immediately on OK -- no "save on exit"
-    // toggle; unlike Dual (a file manager persisting broader session state
-    // like open folders/window positions), this is just ~15 preference
-    // fields, not worth a separate on/off switch for.
+    // toggle; this is just ~15 preference fields, not worth a separate
+    // on/off switch for. Window geometry (below) is the one exception,
+    // saved on close rather than immediately, since it isn't edited through
+    // this dialog.
     bool singleInstance = false;
     bool confirmDeleteEffect = true;
+
+    // Window position/size, saved on close, restored at startup.
+    WindowGeometry windowGeometry;
 
     // Appearance
     // No explicit Light/Dark override: wxWidgets 3.3's SetAppearance() only

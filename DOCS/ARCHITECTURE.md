@@ -86,6 +86,7 @@ Cycle-accurate AY-3-8910 chip emulator, derived from the Gearcoleco project (GPL
 | `src/app/app_resources.rc` | 2 | Windows RC: embedded fonts (ID 101, 102) |
 | `src/app/SettingsDialog.h/.cpp` | — | Preferences dialog (General / Appearance / Audio → Engine, Output device) |
 | `src/app/ClockPicker.h/.cpp` | — | Machine preset + clock spinner pair, shared by the Reclock tool and Preferences' Engine page |
+| `src/app/WindowGeometry.h/.cpp` | — | Window position/size/maximized persistence, with multi-monitor-safe restore (ported from Dual) |
 | `src/core/Settings.h/.cpp` | — | Persisted app-wide preferences: hand-written JSON load/save |
 | `src/core/BankModel.h` | 54 | Data structures + BankModel declaration |
 | `src/core/BankModel.cpp` | 326 | File I/O, encode/decode, CRUD |

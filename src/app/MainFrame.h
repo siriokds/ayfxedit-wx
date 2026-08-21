@@ -53,6 +53,8 @@ private:
     void onEditorMouseWheel(class wxMouseEvent& event);
     void onKeyDown(class wxKeyEvent& event);
     void onSysColourChanged(class wxSysColourChangedEvent& event);
+    void onAbout(wxCommandEvent& event);
+    void onClose(class wxCloseEvent& event);
 
     // Applies theme/font settings immediately -- called both at startup and
     // as a live preview while the Preferences dialog's Appearance page is
