@@ -599,7 +599,8 @@ wxBitmap MakePianoBitmap(const wxWindow* w) {
 }  // namespace
 
 MainFrame::MainFrame()
-    : wxFrame(nullptr, wxID_ANY, "AY Sound FX Editor v0.6", wxDefaultPosition, wxSize(640, 620)) {
+    : wxFrame(nullptr, wxID_ANY, "AY Sound FX Editor v0.6", wxDefaultPosition, wxSize(640, 620)),
+      settings_(LoadSettings()) {
     const wxSize baseSize = wxWindow::FromDIP(wxSize(640, 620), this);
     const wxSize minSize = wxWindow::FromDIP(wxSize(640, 320), this);
     SetSize(baseSize);
@@ -908,8 +909,11 @@ void MainFrame::createMenu() {
 
     Bind(wxEVT_MENU,
          [this](wxCommandEvent&) {
-             SettingsDialog dlg(this);
-             dlg.ShowModal();
+             SettingsDialog dlg(this, settings_);
+             if (dlg.ShowModal() == wxID_OK) {
+                 settings_ = dlg.result();
+                 SaveSettings(settings_);
+             }
          },
          wxID_PREFERENCES);
 
@@ -1929,7 +1933,8 @@ void MainFrame::onInsertEffect(wxCommandEvent& event) {
 
 void MainFrame::onDeleteEffect(wxCommandEvent& event) {
     (void)event;
-    if (wxMessageBox("Delete current effect?", "Confirm", wxYES_NO | wxICON_QUESTION, this) != wxYES) {
+    if (settings_.confirmDeleteEffect &&
+        wxMessageBox("Delete current effect?", "Confirm", wxYES_NO | wxICON_QUESTION, this) != wxYES) {
         return;
     }
 

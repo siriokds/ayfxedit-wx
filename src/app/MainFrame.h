@@ -5,6 +5,7 @@
 #include <filesystem>
 
 #include "../core/BankModel.h"
+#include "../core/Settings.h"
 #include "../audio/AudioEngine.h"
 
 class MainFrame final : public wxFrame {
@@ -97,6 +98,7 @@ private:
 
     BankModel bank_;
     AudioEngine audioEngine_;
+    Settings settings_;
     std::size_t currentEffect_ = 0;
     std::size_t currentOffset_ = 0;
     std::size_t currentY_ = 0;

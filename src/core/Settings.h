@@ -11,7 +11,10 @@ struct Settings {
     enum class Theme { FollowOS, Light, Dark };
 
     // General
-    bool saveOnExit = true;
+    // Settings are always persisted immediately on OK -- no "save on exit"
+    // toggle; unlike Dual (a file manager persisting broader session state
+    // like open folders/window positions), this is just ~15 preference
+    // fields, not worth a separate on/off switch for.
     bool singleInstance = false;
     bool confirmDeleteEffect = true;
 

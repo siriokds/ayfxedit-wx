@@ -47,7 +47,6 @@ std::string ToJson(const Settings& s) {
     out << "{\n";
     out << "  \"version\": 1,\n";
     out << "  \"general\": {\n";
-    out << "    \"saveOnExit\": " << (s.saveOnExit ? "true" : "false") << ",\n";
     out << "    \"singleInstance\": " << (s.singleInstance ? "true" : "false") << ",\n";
     out << "    \"confirmDeleteEffect\": " << (s.confirmDeleteEffect ? "true" : "false") << "\n";
     out << "  },\n";
@@ -231,7 +230,6 @@ Settings LoadSettings() {
     }
 
     if (const auto* general = root.find("general")) {
-        s.saveOnExit = general->find("saveOnExit") ? general->find("saveOnExit")->asBool(s.saveOnExit) : s.saveOnExit;
         s.singleInstance = general->find("singleInstance")
                                 ? general->find("singleInstance")->asBool(s.singleInstance)
                                 : s.singleInstance;

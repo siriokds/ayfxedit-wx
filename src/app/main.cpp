@@ -1,5 +1,9 @@
 #include <wx/wx.h>
+#include <wx/snglinst.h>
 #include "MainFrame.h"
+#include "../core/Settings.h"
+
+#include <memory>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -84,6 +88,15 @@ public:
         // the build target is ever renamed.
         SetAppName("ayfxedit-wx");
 
+        if (LoadSettings().singleInstance) {
+            instanceChecker_ = std::make_unique<wxSingleInstanceChecker>();
+            if (instanceChecker_->IsAnotherRunning()) {
+                wxMessageBox("AY Sound FX Editor is already running.", "Already running",
+                             wxOK | wxICON_INFORMATION);
+                return false;
+            }
+        }
+
 #ifdef _WIN32
         // Opt into following the OS light/dark theme; MSW otherwise defaults
         // to light regardless of the system setting (wxWidgets 3.3+).
@@ -102,6 +115,11 @@ public:
         frame->Show(true);
         return true;
     }
+
+private:
+    // Kept alive for the app's lifetime (the lock it holds is released when
+    // this is destroyed); null when "Single instance" is off in Settings.
+    std::unique_ptr<wxSingleInstanceChecker> instanceChecker_;
 };
 
 wxIMPLEMENT_APP(AyfxApp);
