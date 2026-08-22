@@ -87,6 +87,13 @@ if(MSVC)
     target_compile_definitions(ayfxedit_wx PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
+if(WIN32)
+    # <windows.h> (pulled in transitively by miniaudio.h) defines min/max
+    # macros that otherwise break every std::min/std::max call in the file
+    # that includes it, with a cryptic "illegal token on right side of ::".
+    target_compile_definitions(ayfxedit_wx PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
+
 # miniaudio is header-only and statically compiled in; no DLL/shared lib to ship.
 if(UNIX AND NOT APPLE)
     target_link_libraries(ayfxedit_wx PRIVATE dl pthread m)
