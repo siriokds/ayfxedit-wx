@@ -4,6 +4,8 @@ Cross-platform port of [AY Sound FX Editor v0.6](https://github.com/Threetwoseve
 
 Runs on Windows, Linux, and macOS.
 
+Prebuilt downloads (macOS/Windows) are on the [Releases page](https://github.com/siriokds/ayfxedit-wx/releases). Linux doesn't have a prebuilt binary yet — see [Building](#building) below.
+
 ## Features
 
 - Effect grid editor with piano-style note input, linear/logarithmic period view, and hex T/N/Period/Noise/Volume columns, matching the original's editing model
