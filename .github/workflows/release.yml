@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Homebrew's wxwidgets is dynamically linked against its own dylibs
+      # (/opt/homebrew/lib) -- fine for CI (verified by the other workflow),
+      # but a release binary linked against that wouldn't run on a machine
+      # without Homebrew's wxWidgets installed. Built statically from source
+      # instead, with wx's own bundled copies of its auxiliary libs
+      # (--with-*=builtin) so the result has no external dependencies at all.
+      - name: Cache static wxWidgets build
+        id: wx-cache
+        uses: actions/cache@v4
+        with:
+          path: wx-static-install
+          key: wx-macos-static-3.3.3-${{ hashFiles('.github/workflows/release.yml') }}
+
+      - name: Build wxWidgets 3.3.3 statically
+        if: steps.wx-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -L -o wxWidgets-3.3.3.tar.bz2 https://github.com/wxWidgets/wxWidgets/releases/download/v3.3.3/wxWidgets-3.3.3.tar.bz2
+          tar xf wxWidgets-3.3.3.tar.bz2
+          cd wxWidgets-3.3.3
+          mkdir build-release && cd build-release
+          ../configure --disable-shared \
+            --with-libjpeg=builtin --with-libpng=builtin --with-libtiff=builtin \
+            --with-zlib=builtin --with-expat=builtin --with-regex=builtin \
+            --prefix="$GITHUB_WORKSPACE/wx-static-install"
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+      - name: Configure
+        run: >
+          cmake -S src -B build -DCMAKE_BUILD_TYPE=Release
+          -DwxWidgets_CONFIG_EXECUTABLE="$GITHUB_WORKSPACE/wx-static-install/bin/wx-config"
+
+      - name: Build
+        run: cmake --build build --config Release -j4
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp build/ayfxedit_wx dist/
+          cd dist
+          zip -r "../ayfxedit-wx-${{ github.ref_name }}-macos.zip" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayfxedit-wx-macos
+          path: ayfxedit-wx-${{ github.ref_name }}-macos.zip
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Point vcpkg's binary cache at a workspace-relative path
+        shell: pwsh
+        run: |
+          $cacheDir = "$env:GITHUB_WORKSPACE\vcpkg-cache"
+          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$cacheDir" >> $env:GITHUB_ENV
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-cache
+          key: vcpkg-windows-static-wxwidgets-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            vcpkg-windows-static-wxwidgets-
+
+      # x64-windows-static links everything (wxWidgets + the MSVC runtime)
+      # into the .exe itself, so the release zip needs no DLLs alongside it
+      # -- unlike the regular build.yml verification job, which uses the
+      # default dynamic x64-windows triplet since it only needs to prove
+      # the app compiles, not produce something distributable.
+      - name: Install wxWidgets via vcpkg (static triplet)
+        shell: pwsh
+        run: vcpkg install wxwidgets:x64-windows-static
+
+      - name: Configure
+        shell: cmd
+        run: >
+          cmake -S src -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE="%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static
+
+      - name: Build
+        shell: cmd
+        run: cmake --build build
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build\ayfxedit_wx.exe dist\
+          Compress-Archive -Path dist\* -DestinationPath "ayfxedit-wx-${{ github.ref_name }}-windows.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayfxedit-wx-windows
+          path: ayfxedit-wx-${{ github.ref_name }}-windows.zip
+
+  publish:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/ayfxedit-wx-macos/*.zip
+            artifacts/ayfxedit-wx-windows/*.zip
+          generate_release_notes: true
