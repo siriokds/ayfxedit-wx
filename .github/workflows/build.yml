@@ -30,6 +30,18 @@ jobs:
         with:
           submodules: recursive
 
+      # cmake's "Visual Studio 17 2022" generator relies on vswhere to
+      # locate an installed VS instance, which was failing outright on this
+      # runner image ("could not find any instance of Visual Studio") even
+      # though VS2022 is preinstalled. Sidestepping that lookup entirely:
+      # ilammy/msvc-dev-cmd loads the MSVC dev environment directly (like a
+      # Developer Command Prompt), and NMake Makefiles just uses cl.exe from
+      # PATH instead of asking cmake to find a VS instance on its own.
+      - name: Set up MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       # wxWidgets 3.3 has no ready-made Windows package -- vcpkg builds it
       # from source, which is slow (10-20 min), so its compiled output is
       # cached across runs. VCPKG_INSTALLATION_ROOT is preinstalled on
@@ -54,10 +66,12 @@ jobs:
         run: vcpkg install wxwidgets:x64-windows
 
       - name: Configure
+        shell: cmd
         run: >
-          cmake -S src -B build -G "Visual Studio 17 2022" -A x64
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake -S src -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE="%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build
-        run: cmake --build build --config Release -j4
+        shell: cmd
+        run: cmake --build build
