@@ -25,7 +25,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: wx-static-install
-          key: wx-macos-static-3.3.3-${{ hashFiles('.github/workflows/release.yml') }}
+          # Pinned to a fixed suffix (bump it when the wx build recipe above
+          # actually changes) rather than hashing this whole file -- an
+          # unrelated edit elsewhere in the workflow shouldn't force a
+          # ~15-20 min from-source wxWidgets rebuild.
+          key: wx-macos-static-3.3.3-v1
 
       - name: Build wxWidgets 3.3.3 statically
         if: steps.wx-cache.outputs.cache-hit != 'true'
@@ -49,12 +53,48 @@ jobs:
       - name: Build
         run: cmake --build build --config Release -j4
 
+      # Wraps the raw executable in a proper .app bundle -- a bare Unix
+      # binary has no icon/Dock presence and isn't how macOS software is
+      # normally distributed (Gatekeeper is also noisier about it than
+      # about a bundle). No version number in the bundle/display name per
+      # macOS convention -- that belongs in Info.plist, not the visible name.
       - name: Package
         run: |
-          mkdir -p dist
-          cp build/ayfxedit_wx dist/
+          APP_NAME="AY Sound FX Editor"
+          VERSION="${GITHUB_REF_NAME#v}"
+          BUNDLE="dist/${APP_NAME}.app"
+          mkdir -p "$BUNDLE/Contents/MacOS"
+          cp build/ayfxedit_wx "$BUNDLE/Contents/MacOS/"
+          cat > "$BUNDLE/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleName</key>
+              <string>${APP_NAME}</string>
+              <key>CFBundleDisplayName</key>
+              <string>${APP_NAME}</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.siriokds.ayfxedit-wx</string>
+              <key>CFBundleVersion</key>
+              <string>${VERSION}</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${VERSION}</string>
+              <key>CFBundleExecutable</key>
+              <string>ayfxedit_wx</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+          </dict>
+          </plist>
+          PLIST
           cd dist
-          zip -r "../ayfxedit-wx-${{ github.ref_name }}-macos.zip" .
+          zip -r "../ayfxedit-wx-${{ github.ref_name }}-macos.zip" "${APP_NAME}.app"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -86,7 +126,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}\vcpkg-cache
-          key: vcpkg-windows-static-wxwidgets-${{ hashFiles('.github/workflows/release.yml') }}
+          # Pinned (see the macOS cache step above for why, same reasoning).
+          key: vcpkg-windows-static-wxwidgets-v1
           restore-keys: |
             vcpkg-windows-static-wxwidgets-
 

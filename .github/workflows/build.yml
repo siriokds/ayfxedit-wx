@@ -57,7 +57,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}\vcpkg-cache
-          key: vcpkg-windows-wxwidgets-${{ hashFiles('.github/workflows/build.yml') }}
+          # Pinned to a fixed suffix (bump it if the vcpkg triplet/wx version
+          # changes) rather than hashing this whole file, so an unrelated
+          # edit elsewhere in the workflow doesn't force a wxWidgets rebuild.
+          key: vcpkg-windows-wxwidgets-v1
           restore-keys: |
             vcpkg-windows-wxwidgets-
 
