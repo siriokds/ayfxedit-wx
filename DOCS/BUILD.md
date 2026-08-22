@@ -86,6 +86,18 @@ build/ayfxedit_wx
 
 ---
 
+## Continuous Integration
+
+`.github/workflows/build.yml` builds on every push/PR, verifying the build only (no release artifacts yet):
+
+- **macOS**: `brew install wxwidgets`, same as local dev above.
+- **Windows**: wxWidgets has no ready-made Windows package, so it's built from source via vcpkg (`vcpkg install wxwidgets:x64-windows`), cached across runs (vcpkg's binary cache, persisted via `actions/cache`, keyed on the workflow file's own hash) since building it from scratch takes 10-20 minutes. Two Windows-specific gotchas hit while setting this up:
+  - cmake's `-G "Visual Studio 17 2022"` generator failed with "could not find any instance of Visual Studio" on the `windows-latest` runner (which turned out to have VS 18 installed, not VS 17) — worked around by loading the MSVC dev environment directly via `ilammy/msvc-dev-cmd` and using the `NMake Makefiles` generator instead, which doesn't need to locate a VS instance itself.
+  - MSVC failed on every `std::min`/`std::max` call in `AudioEngine.cpp` with a cryptic `error C2589: '(': illegal token on right side of '::'` — `<windows.h>` (pulled in transitively by `miniaudio.h`) defines `min`/`max` as macros unless `NOMINMAX` is defined first; fixed by adding `NOMINMAX`/`WIN32_LEAN_AND_MEAN` as compile definitions for `WIN32` builds in `src/CMakeLists.txt`.
+- **Linux**: not set up yet.
+
+---
+
 ## CMake options
 
 | Option | Default | Description |
