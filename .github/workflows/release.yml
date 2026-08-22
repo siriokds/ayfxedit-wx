@@ -99,10 +99,16 @@ jobs:
         shell: pwsh
         run: vcpkg install wxwidgets:x64-windows-static
 
+      # x64-windows-static's wxWidgets libs are built with the static CRT
+      # (/MT); the vcpkg toolchain file doesn't force that choice onto our
+      # own target automatically, so without this our object files default
+      # to /MD and the linker rejects the mix ("mismatch detected for
+      # 'RuntimeLibrary'").
       - name: Configure
         shell: cmd
         run: >
           cmake -S src -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           -DCMAKE_TOOLCHAIN_FILE="%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake"
           -DVCPKG_TARGET_TRIPLET=x64-windows-static
 
